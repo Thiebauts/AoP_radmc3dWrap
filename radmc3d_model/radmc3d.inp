@@ -1,0 +1,4 @@
+nphot = 1024000
+modified_random_walk = 1
+scattering_mode_max = 1
+istar_sphere = 1
