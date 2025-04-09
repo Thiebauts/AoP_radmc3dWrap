@@ -20,7 +20,7 @@ from radmc3d_aux import (run_radmc3d, read_dust_temperature, check_convergence,
                         plot_convergence_history, 
                         analyze_temperature_distribution, plot_advanced_temperature_density, 
                         read_dust_density, plot_temperature_dependent_summary,
-                        plot_initial_dust_density)
+                        plot_initial_dust_density, read_amr_grid)
 
 def backup_temperature_file(iteration):
     """
@@ -192,7 +192,7 @@ def iterative_mctherm(nphotons_start=1e6, nphotons_max=1e8,
             print(f"90th percentile difference: {metrics['p90_diff']*100:.4f}%")
             
             # Check if converged
-            if metrics['max_diff'] < convergence_threshold:
+            if metrics['mean_diff'] < convergence_threshold:
                 converged = True
                 print(f"\nConvergence reached after {iteration} iterations!")
                 print(f"Final photon count: {nphotons:,.0f}")
@@ -265,8 +265,8 @@ def parse_arguments():
     parser.add_argument('--nphotons_start', type=float, default=1e4, help='Initial number of photon packages')
     parser.add_argument('--nphotons_max', type=float, default=1e8, help='Maximum number of photon packages')
     parser.add_argument('--scale_factor', type=float, default=2.0, help='Factor to increase photons by each iteration')
-    parser.add_argument('--threshold', type=float, default=0.1, help='Convergence threshold (maximum relative difference)')
-    parser.add_argument('--max_iterations', type=int, default=5, help='Maximum number of iterations')
+    parser.add_argument('--threshold', type=float, default=0.02, help='Convergence threshold for mean relative temperature difference')
+    parser.add_argument('--max_iterations', type=int, default=8, help='Maximum number of iterations')
     
     # Other options
     parser.add_argument('--no_plots', action='store_true', help='Disable plotting')
@@ -284,10 +284,10 @@ def parse_arguments():
     parser.add_argument('--no_temp_dependent', action='store_true', help='Disable temperature-dependent dust opacities')
     parser.add_argument('--temp_ranges', type=str, default='50,150,250', 
                        help='Temperature range boundaries for dust opacity selection (comma-separated)')
-    parser.add_argument('--max_temp_iterations', type=int, default=5, 
+    parser.add_argument('--max_temp_iterations', type=int, default=8, 
                        help='Maximum number of temperature-dependent opacity iterations')
-    parser.add_argument('--temp_threshold', type=float, default=0.05, 
-                       help='Convergence threshold for temperature-dependent opacity iterations')
+    parser.add_argument('--temp_threshold', type=float, default=0.02, 
+                       help='Convergence threshold for mean relative temperature difference in opacity iterations')
     parser.add_argument('--cells_change_threshold', type=float, default=1.0,
                        help='Convergence threshold for cells changing temperature groups (percentage)')
     
@@ -350,7 +350,7 @@ def main():
             # Load the temperature data for visualization if needed
             if args.advanced_plots:
                 try:
-                    from radmc3d_aux import read_amr_grid, read_dust_temperature
+                    # Grid info and temperature should be read using the already imported functions
                     grid_info = read_amr_grid()
                     temp_data, _ = read_dust_temperature()
                     print("Successfully loaded temperature data for visualization")
@@ -722,14 +722,14 @@ def main():
                     prev_groups = new_groups.copy()
                     
                     # Update for next iteration - check both temperature convergence and group changes
-                    temp_converged = (metrics['max_diff'] < args.temp_threshold and 
+                    temp_converged = (metrics['mean_diff'] < args.temp_threshold and 
                                      cells_changed_percent < args.cells_change_threshold)
                     
                     # If converged, print reason
                     if temp_converged:
-                        if metrics['max_diff'] < args.temp_threshold and cells_changed_percent < args.cells_change_threshold:
+                        if metrics['mean_diff'] < args.temp_threshold and cells_changed_percent < args.cells_change_threshold:
                             print(f"\nConvergence reached: both temperature difference (<{args.temp_threshold*100:.1f}%) and group changes (<{args.cells_change_threshold:.1f}%) are below thresholds")
-                        elif metrics['max_diff'] < args.temp_threshold:
+                        elif metrics['mean_diff'] < args.temp_threshold:
                             print("\nConvergence reached: temperature difference is below threshold")
                         elif cells_changed_percent < args.cells_change_threshold:
                             print("\nConvergence reached: group changes are below threshold")

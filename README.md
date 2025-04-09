@@ -110,7 +110,7 @@ The SED is calculated using the command `radmc3d sed incl [value] phi [value]` a
 
 The code uses two convergence criteria for temperature-dependent calculations:
 
-1. **Temperature Difference**: The maximum relative temperature difference between iterations must fall below the specified threshold (default: 5%).
+1. **Mean Temperature Difference**: The mean relative temperature difference between iterations must fall below the specified threshold (default: 2%). This uses the average difference across all cells, which is less sensitive to outliers than the maximum difference.
 
 2. **Cell Temperature Group Changes**: The percentage of cells that change their temperature group (e.g., from cold to warm) between iterations must fall below the specified threshold (default: 1%).
 
@@ -240,11 +240,11 @@ python main_radmc3d.py --advanced_plots --multi_species_handling all
 - `--nphotons_start`: Initial number of photon packages (default: 1e4)
 - `--nphotons_max`: Maximum number of photon packages (default: 1e8)
 - `--scale_factor`: Factor to increase photons by each iteration (default: 2.0)
-- `--threshold`: Convergence threshold for normal temperature calculations (default: 10%)
-- `--max_iterations`: Maximum number of iterations (default: 5)
-- `--temp_threshold`: Convergence threshold for temperature differences (default: 5%)
+- `--threshold`: Convergence threshold for mean relative temperature difference in normal calculations (default: 2%)
+- `--max_iterations`: Maximum number of iterations (default: 8)
+- `--temp_threshold`: Convergence threshold for mean relative temperature difference in temperature-dependent opacity iterations (default: 2%)
 - `--cells_change_threshold`: Convergence threshold for cells changing temperature groups (default: 1%)
-- `--max_temp_iterations`: Maximum number of temperature-dependent opacity iterations (default: 5)
+- `--max_temp_iterations`: Maximum number of temperature-dependent opacity iterations (default: 8)
 - `--setseed`: Random seed for reproducibility (default: None)
 - `--density_weighted`: Use density-weighted convergence metrics (default: False)
 
@@ -290,13 +290,13 @@ The `--multi_species_handling` option controls how multiple dust species are dis
 The code checks for convergence between iterations by comparing the dust temperature solutions and calculating:
 
 1. Maximum relative difference
-2. Mean relative difference
+2. Mean relative difference (used as the primary convergence criterion)
 3. Median relative difference
 4. 90th percentile difference
 5. Percentage of cells changing temperature groups (for temperature-dependent calculations)
 
 Convergence is reached when both:
-- The maximum relative temperature difference falls below the specified threshold
+- The mean relative temperature difference falls below the specified threshold
 - The percentage of cells changing temperature groups falls below the specified threshold
 
 For temperature-dependent iterations, convergence is assessed both in terms of temperature stability and the stability of cell assignments to temperature zones.

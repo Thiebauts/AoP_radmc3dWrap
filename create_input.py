@@ -510,6 +510,7 @@ def create_radmc3d_control(nphot_therm=1000000, scattering_mode_max=1,
     with open('radmc3d.inp', 'w') as f:
         f.write(f'nphot = {nphot_therm}\n')
         f.write(f'scattering_mode_max = {scattering_mode_max}\n')
+        f.write('mc_scat_maxtauabs = 5.d0\n')
         
         if modified_random_walk:
             f.write('modified_random_walk = 1\n')
