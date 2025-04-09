@@ -2,6 +2,9 @@ import numpy as np
 import os
 import subprocess
 import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm, BoundaryNorm
+# Import physical constants from create_input
+from create_input import au, Rsun, Msun, G, sigma, c, h, kB
 
 def read_dust_temperature(filename='dust_temperature.dat'):
     """
@@ -148,19 +151,65 @@ def check_convergence(current_temp, previous_temp, threshold=0.01, density_weigh
         If return_details=False: True if converged, False otherwise
         If return_details=True: Dictionary with convergence metrics
     """
-    # Ensure arrays have same shape
+    # Handle arrays with different shapes (e.g., transitioning from single to multi-species)
     if current_temp.shape != previous_temp.shape:
-        raise ValueError(f"Temperature arrays have different shapes: {current_temp.shape} vs {previous_temp.shape}")
+        print(f"Warning: Temperature arrays have different shapes: {current_temp.shape} vs {previous_temp.shape}")
+        print("Adapting arrays for convergence check...")
+        
+        # Case 1: Different number of species
+        if len(current_temp.shape) == len(previous_temp.shape) and current_temp.shape[:-1] == previous_temp.shape[:-1]:
+            if current_temp.shape[-1] > previous_temp.shape[-1]:
+                # Current has more species than previous
+                print(f"Using first species from current temperature ({current_temp.shape[-1]} species)")
+                if len(current_temp.shape) == 3:  # 2D case
+                    current_temp_adapted = current_temp[:, :, 0:1]  # Keep dimension
+                elif len(current_temp.shape) == 4:  # 3D case
+                    current_temp_adapted = current_temp[:, :, :, 0:1]
+                else:
+                    raise ValueError(f"Unexpected temperature array dimensionality: {len(current_temp.shape)}")
+                previous_temp_adapted = previous_temp
+            else:
+                # Previous has more species than current
+                print(f"Using first species from previous temperature ({previous_temp.shape[-1]} species)")
+                current_temp_adapted = current_temp
+                if len(previous_temp.shape) == 3:  # 2D case
+                    previous_temp_adapted = previous_temp[:, :, 0:1]
+                elif len(previous_temp.shape) == 4:  # 3D case
+                    previous_temp_adapted = previous_temp[:, :, :, 0:1]
+                else:
+                    raise ValueError(f"Unexpected temperature array dimensionality: {len(previous_temp.shape)}")
+        else:
+            # Other shape mismatches - try a more general approach
+            print("Using averaged temperature for comparison")
+            
+            # Average over species dimension if present
+            if len(current_temp.shape) >= 3:
+                current_temp_adapted = np.mean(current_temp, axis=-1)
+            else:
+                current_temp_adapted = current_temp
+                
+            if len(previous_temp.shape) >= 3:
+                previous_temp_adapted = np.mean(previous_temp, axis=-1)
+            else:
+                previous_temp_adapted = previous_temp
+                
+            # Ensure arrays have same shape for comparison
+            if current_temp_adapted.shape != previous_temp_adapted.shape:
+                raise ValueError(f"Cannot adapt temperature arrays with shapes {current_temp.shape} and {previous_temp.shape} for comparison")
+    else:
+        # Same shape, no adaptation needed
+        current_temp_adapted = current_temp
+        previous_temp_adapted = previous_temp
     
     # Calculate absolute differences
-    abs_diff = np.abs(current_temp - previous_temp)
+    abs_diff = np.abs(current_temp_adapted - previous_temp_adapted)
     
     # Create a mask for non-zero temperatures to avoid division by zero
-    valid_mask = previous_temp > 1e-10  # Small epsilon to avoid numerical issues
+    valid_mask = previous_temp_adapted > 1e-10  # Small epsilon to avoid numerical issues
     
     # Calculate relative differences only for valid cells
     rel_diff = np.zeros_like(abs_diff)
-    rel_diff[valid_mask] = abs_diff[valid_mask] / previous_temp[valid_mask]
+    rel_diff[valid_mask] = abs_diff[valid_mask] / previous_temp_adapted[valid_mask]
     
     # If all cells have zero temperature (unlikely but possible), use absolute difference
     if not np.any(valid_mask):
@@ -177,10 +226,10 @@ def check_convergence(current_temp, previous_temp, threshold=0.01, density_weigh
     # Calculate density-weighted difference if weights provided
     if density_weights is not None:
         # Ensure density weights have compatible shape
-        if density_weights.shape != current_temp.shape[:-1]:  # Ignore species dimension
+        if density_weights.shape != current_temp_adapted.shape[:-1]:  # Ignore species dimension
             # Try to reshape or broadcast
             try:
-                weights = np.broadcast_to(density_weights, current_temp.shape[:-1])
+                weights = np.broadcast_to(density_weights, current_temp_adapted.shape[:-1])
             except ValueError:
                 print("Warning: Density weights shape incompatible. Using unweighted convergence.")
                 weights = None
@@ -189,7 +238,7 @@ def check_convergence(current_temp, previous_temp, threshold=0.01, density_weigh
         
         if weights is not None:
             # Calculate weighted metrics for each species and take max
-            weighted_diff = np.max([np.sum(weights * rel_diff[..., i]) for i in range(current_temp.shape[-1])])
+            weighted_diff = np.max([np.sum(weights * rel_diff[..., i]) for i in range(current_temp_adapted.shape[-1])])
         else:
             weighted_diff = None
     else:
@@ -260,359 +309,62 @@ def run_radmc3d(cmd='mctherm', params=None, verbose=True, setseed=None):
 
 def read_radmc3d_params(filename='radmc3d.inp'):
     """
-    Read the RADMC-3D parameter file and return as a dictionary.
+    Read the RADMC-3D parameter file and return a dictionary of parameters.
     
     Parameters:
     -----------
     filename : str
-        Path to the radmc3d.inp file
+        Path to the RADMC-3D parameter file
         
     Returns:
     --------
     dict
-        Dictionary of parameters and their values
+        Dictionary of parameters
     """
     params = {}
     
-    if not os.path.exists(filename):
-        return params
-    
-    with open(filename, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
+    try:
+        with open(filename, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
                 
-            parts = line.split('=')
-            if len(parts) == 2:
-                key = parts[0].strip()
-                value = parts[1].strip()
-                try:
-                    # Try to convert to numeric type if possible
-                    if '.' in value:
-                        params[key] = float(value)
-                    else:
+                if '=' in line:
+                    key, value = line.split('=', 1)
+                    key = key.strip()
+                    value = value.strip()
+                    
+                    # Try to convert to appropriate type
+                    try:
+                        # First try integer
                         params[key] = int(value)
-                except ValueError:
-                    # If conversion fails, keep as string
-                    params[key] = value
+                    except ValueError:
+                        try:
+                            # Then try float
+                            params[key] = float(value)
+                        except ValueError:
+                            # Finally, keep as string
+                            params[key] = value
+                else:
+                    # Handle parameter files with no equals sign
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        key = parts[0].strip()
+                        value = parts[1].strip()
+                        
+                        # Try to convert to appropriate type
+                        try:
+                            params[key] = int(value)
+                        except ValueError:
+                            try:
+                                params[key] = float(value)
+                            except ValueError:
+                                params[key] = value
+    except FileNotFoundError:
+        print(f"Warning: Parameter file {filename} not found.")
     
     return params
-
-def plot_temperature_slice(temp_data, grid_info, species=0, slice_dim='z', slice_idx=0, 
-                         save_fig=False, filename=None, log_scale=False, title=None,
-                         vmin=None, vmax=None):
-    """
-    Plot a 2D slice of the temperature distribution.
-    
-    Parameters:
-    -----------
-    temp_data : ndarray
-        Temperature data
-    grid_info : dict
-        Grid information
-    species : int
-        Dust species index
-    slice_dim : str
-        Dimension to slice ('x', 'y', 'z' for Cartesian, 'r', 'theta', 'phi' for spherical)
-    slice_idx : int
-        Index along slice_dim
-    save_fig : bool
-        Whether to save the figure
-    filename : str
-        Filename to save the figure
-    log_scale : bool
-        Whether to use logarithmic color scale
-    title : str
-        Plot title
-    vmin, vmax : float
-        Min and max values for color scale
-        
-    Returns:
-    --------
-    fig, ax : matplotlib Figure and Axes
-        Figure and axes objects
-    """
-    import matplotlib.pyplot as plt
-    from matplotlib.colors import LogNorm
-    
-    # Create figure
-    fig, ax = plt.subplots(figsize=(10, 8))
-    
-    # Extract the temperature slice based on grid type
-    if grid_info['type'] == 'cartesian':
-        # Cartesian grid
-        if slice_dim == 'x':
-            x_idx = slice_idx
-            x_label, y_label = 'y', 'z'
-            extent = [grid_info['yi'][0], grid_info['yi'][-1], 
-                      grid_info['zi'][0], grid_info['zi'][-1]]
-            temp_slice = temp_data[x_idx, :, :, species]
-            X, Y = np.meshgrid(grid_info['yc'], grid_info['zc'])
-        elif slice_dim == 'y':
-            y_idx = slice_idx
-            x_label, y_label = 'x', 'z'
-            extent = [grid_info['xi'][0], grid_info['xi'][-1], 
-                      grid_info['zi'][0], grid_info['zi'][-1]]
-            temp_slice = temp_data[:, y_idx, :, species]
-            X, Y = np.meshgrid(grid_info['xc'], grid_info['zc'])
-        elif slice_dim == 'z':
-            z_idx = slice_idx
-            x_label, y_label = 'x', 'y'
-            extent = [grid_info['xi'][0], grid_info['xi'][-1], 
-                      grid_info['yi'][0], grid_info['yi'][-1]]
-            temp_slice = temp_data[:, :, z_idx, species]
-            X, Y = np.meshgrid(grid_info['xc'], grid_info['yc'])
-        else:
-            raise ValueError(f"Invalid slice dimension: {slice_dim}")
-        
-        temp_slice = temp_slice.T  # Transpose for proper orientation
-        
-    elif grid_info['type'] == 'spherical':
-        # Spherical grid - handle both 2D and 3D cases
-        if 'nphi' in grid_info and grid_info['nphi'] > 1:
-            # 3D spherical grid
-            if slice_dim == 'r':
-                r_idx = slice_idx
-                x_label, y_label = 'θ', 'φ'
-                extent = [grid_info['thetai'][0], grid_info['thetai'][-1], 
-                          grid_info['phii'][0], grid_info['phii'][-1]]
-                temp_slice = temp_data[r_idx, :, :, species]
-                X, Y = np.meshgrid(grid_info['thetac'], grid_info['phic'])
-            elif slice_dim == 'theta':
-                theta_idx = slice_idx
-                x_label, y_label = 'r', 'φ'
-                extent = [grid_info['ri'][0], grid_info['ri'][-1], 
-                          grid_info['phii'][0], grid_info['phii'][-1]]
-                temp_slice = temp_data[:, theta_idx, :, species]
-                X, Y = np.meshgrid(grid_info['rc'], grid_info['phic'])
-            elif slice_dim == 'phi':
-                phi_idx = slice_idx
-                x_label, y_label = 'r', 'θ'
-                extent = [grid_info['ri'][0], grid_info['ri'][-1], 
-                          grid_info['thetai'][0], grid_info['thetai'][-1]]
-                temp_slice = temp_data[:, :, phi_idx, species]
-                X, Y = np.meshgrid(grid_info['rc'], grid_info['thetac'])
-            else:
-                raise ValueError(f"Invalid slice dimension: {slice_dim}")
-            
-            temp_slice = temp_slice.T  # Transpose for proper orientation
-        else:
-            # 2D spherical grid (r, theta) - common for water fountain models
-            x_label, y_label = 'r', 'θ'
-            extent = [grid_info['ri'][0], grid_info['ri'][-1], 
-                      grid_info['thetai'][0], grid_info['thetai'][-1]]
-            temp_slice = temp_data[:, :, species]
-            X, Y = np.meshgrid(grid_info['rc'], grid_info['thetac'])
-            temp_slice = temp_slice.T  # Transpose for proper orientation
-    else:
-        raise ValueError(f"Unknown grid type: {grid_info['type']}")
-    
-    # Plot the temperature slice
-    if log_scale:
-        im = ax.pcolormesh(X, Y, temp_slice, norm=LogNorm(vmin=vmin, vmax=vmax), cmap='inferno', shading='auto')
-    else:
-        im = ax.pcolormesh(X, Y, temp_slice, vmin=vmin, vmax=vmax, cmap='inferno', shading='auto')
-    
-    # Set axis labels and title
-    ax.set_xlabel(f'{x_label} [cm]')
-    ax.set_ylabel(f'{y_label} [cm]')
-    
-    if title:
-        ax.set_title(title)
-    else:
-        ax.set_title(f'Dust Temperature [K], {slice_dim}={slice_idx}')
-    
-    # Add colorbar
-    cbar = fig.colorbar(im, ax=ax)
-    cbar.set_label('Temperature [K]')
-    
-    # Save figure if requested
-    if save_fig:
-        if filename:
-            plt.savefig(filename, dpi=150, bbox_inches='tight')
-        else:
-            plt.savefig(f'temperature_{slice_dim}{slice_idx}.png', dpi=150, bbox_inches='tight')
-    
-    return fig, ax
-
-def compare_temperature_slices(temp_data1, temp_data2, grid_info, species=0, slice_dim='z', 
-                               slice_idx=0, save_fig=False, filename=None, titles=None,
-                               show_fig=False):
-    """
-    Compare two temperature fields side by side and show their difference.
-    
-    Parameters:
-    -----------
-    temp_data1, temp_data2 : ndarray
-        Temperature data arrays to compare. Can be 3D [nr, ntheta, nspec] or 4D [nr, ntheta, nphi, nspec]
-    grid_info : dict
-        Grid information
-    species : int
-        Dust species index
-    slice_dim : str
-        Dimension to slice ('x', 'y', 'z' for Cartesian or 'phi' for spherical)
-    slice_idx : int
-        Index along the slice dimension
-    save_fig : bool
-        Whether to save the figure
-    filename : str
-        Output filename if save_fig is True
-    titles : list
-        Custom titles for the plots [title1, title2, diff_title]
-    show_fig : bool
-        Whether to display the figure (default: False)
-    """
-    # Check if we're dealing with a spherical grid
-    is_spherical = grid_info.get('type', 'cartesian').lower() == 'spherical'
-    
-    # Check dimensionality of temperature arrays
-    is_3d_temp = len(temp_data1.shape) == 3  # [nr, ntheta, nspec]
-    is_4d_temp = len(temp_data1.shape) == 4  # [nr, ntheta, nphi, nspec]
-    
-    # Make sure both arrays have the same dimensionality
-    if len(temp_data1.shape) != len(temp_data2.shape):
-        print(f"Warning: Temperature arrays have different dimensions: {temp_data1.shape} vs {temp_data2.shape}")
-        return
-    
-    # Extract slices based on grid type and dimensionality
-    if is_spherical:
-        if is_3d_temp:  # 2D spherical grid (r, theta) with species
-            # For 2D spherical grid, we don't need to slice along phi
-            slice1 = temp_data1[:, :, species]
-            if temp_data2.shape == temp_data1.shape:
-                slice2 = temp_data2[:, :, species]
-                xlabel, ylabel = 'r', 'theta'
-            else:
-                print(f"Warning: Temperature arrays have different shapes: {temp_data1.shape} vs {temp_data2.shape}")
-                return
-        elif is_4d_temp:  # 3D spherical grid (r, theta, phi) with species
-            # For 3D spherical grid, we slice along phi
-            if slice_dim == 'phi' or slice_dim == 'z':
-                if slice_idx >= temp_data1.shape[2]:
-                    slice_idx = 0  # Default to first phi slice if index is out of bounds
-                
-                slice1 = temp_data1[:, :, slice_idx, species]
-                if temp_data2.shape == temp_data1.shape:
-                    slice2 = temp_data2[:, :, slice_idx, species]
-                    xlabel, ylabel = 'r', 'theta'
-                else:
-                    print(f"Warning: Temperature arrays have different shapes: {temp_data1.shape} vs {temp_data2.shape}")
-                    return
-            else:
-                print(f"Warning: Slice dimension '{slice_dim}' not supported for spherical grid. Using phi=0 slice.")
-                slice1 = temp_data1[:, :, 0, species]
-                if temp_data2.shape == temp_data1.shape:
-                    slice2 = temp_data2[:, :, 0, species]
-                    xlabel, ylabel = 'r', 'theta'
-                else:
-                    print(f"Warning: Temperature arrays have different shapes: {temp_data1.shape} vs {temp_data2.shape}")
-                    return
-        else:
-            print(f"Warning: Unexpected temperature array shape: {temp_data1.shape}")
-            return
-    else:  # Cartesian grid
-        if is_4d_temp:  # 3D Cartesian grid (x, y, z) with species
-            if slice_dim == 'z':
-                if slice_idx >= temp_data1.shape[2]:
-                    slice_idx = 0
-                slice1 = temp_data1[:, :, slice_idx, species]
-                if temp_data2.shape == temp_data1.shape:
-                    slice2 = temp_data2[:, :, slice_idx, species]
-                    xlabel, ylabel = 'x', 'y'
-                else:
-                    print(f"Warning: Temperature arrays have different shapes: {temp_data1.shape} vs {temp_data2.shape}")
-                    return
-            elif slice_dim == 'y':
-                if slice_idx >= temp_data1.shape[1]:
-                    slice_idx = 0
-                slice1 = temp_data1[:, slice_idx, :, species]
-                if temp_data2.shape == temp_data1.shape:
-                    slice2 = temp_data2[:, slice_idx, :, species]
-                    xlabel, ylabel = 'x', 'z'
-                else:
-                    print(f"Warning: Temperature arrays have different shapes: {temp_data1.shape} vs {temp_data2.shape}")
-                    return
-            elif slice_dim == 'x':
-                if slice_idx >= temp_data1.shape[0]:
-                    slice_idx = 0
-                slice1 = temp_data1[slice_idx, :, :, species]
-                if temp_data2.shape == temp_data1.shape:
-                    slice2 = temp_data2[slice_idx, :, :, species]
-                    xlabel, ylabel = 'y', 'z'
-                else:
-                    print(f"Warning: Temperature arrays have different shapes: {temp_data1.shape} vs {temp_data2.shape}")
-                    return
-            else:
-                print(f"Warning: Slice dimension '{slice_dim}' not supported. Using z slice.")
-                slice1 = temp_data1[:, :, 0, species]
-                if temp_data2.shape == temp_data1.shape:
-                    slice2 = temp_data2[:, :, 0, species]
-                    xlabel, ylabel = 'x', 'y'
-                else:
-                    print(f"Warning: Temperature arrays have different shapes: {temp_data1.shape} vs {temp_data2.shape}")
-                    return
-        elif is_3d_temp:  # 2D Cartesian grid (x, y) with species
-            slice1 = temp_data1[:, :, species]
-            if temp_data2.shape == temp_data1.shape:
-                slice2 = temp_data2[:, :, species]
-                xlabel, ylabel = 'x', 'y'
-            else:
-                print(f"Warning: Temperature arrays have different shapes: {temp_data1.shape} vs {temp_data2.shape}")
-                return
-        else:
-            print(f"Warning: Unexpected temperature array shape: {temp_data1.shape}")
-            return
-    
-    # Calculate relative difference with protection against division by zero
-    valid_mask = slice1 > 1e-10  # Small epsilon to avoid numerical issues
-    rel_diff = np.zeros_like(slice1)
-    rel_diff[valid_mask] = np.abs(slice2[valid_mask] - slice1[valid_mask]) / slice1[valid_mask]
-    
-    # Create figure with 3 subplots
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-    
-    # Plot first temperature field
-    im1 = axes[0].imshow(slice1, origin='lower', interpolation='nearest', cmap='inferno')
-    plt.colorbar(im1, ax=axes[0], label='Temperature [K]')
-    axes[0].set_xlabel(xlabel)
-    axes[0].set_ylabel(ylabel)
-    if titles and len(titles) > 0:
-        axes[0].set_title(titles[0])
-    else:
-        axes[0].set_title(f'Temperature 1')
-    
-    # Plot second temperature field
-    im2 = axes[1].imshow(slice2, origin='lower', interpolation='nearest', cmap='inferno')
-    plt.colorbar(im2, ax=axes[1], label='Temperature [K]')
-    axes[1].set_xlabel(xlabel)
-    axes[1].set_ylabel(ylabel)
-    if titles and len(titles) > 1:
-        axes[1].set_title(titles[1])
-    else:
-        axes[1].set_title(f'Temperature 2')
-    
-    # Plot relative difference
-    max_diff = np.max(rel_diff)
-    im3 = axes[2].imshow(rel_diff, origin='lower', interpolation='nearest', 
-                         cmap='viridis', vmin=0, vmax=min(1.0, max_diff*1.2 if max_diff > 0 else 1.0))
-    plt.colorbar(im3, ax=axes[2], label='Relative Difference')
-    axes[2].set_xlabel(xlabel)
-    axes[2].set_ylabel(ylabel)
-    if titles and len(titles) > 2:
-        axes[2].set_title(titles[2])
-    else:
-        axes[2].set_title('Relative Difference')
-    
-    plt.tight_layout()
-    
-    if save_fig and filename:
-        plt.savefig(filename, dpi=300, bbox_inches='tight')
-    
-    if show_fig:
-        plt.show()
-    else:
-        plt.close(fig)
 
 def save_temperature_history(temp_history, filename='temperature_history.npy'):
     """
@@ -705,6 +457,100 @@ def plot_convergence_history(metrics_history, nphotons_history, save_fig=False, 
     else:
         plt.close(fig)
 
+def plot_temperature_dependent_summary(metrics_history, cells_changed_history, iterations=None,
+                                       temp_threshold=0.05, cells_change_threshold=1.0,
+                                       save_fig=False, filename=None, show_fig=False):
+    """
+    Plot a summary of temperature-dependent iterations showing both temperature
+    convergence metrics and cells changing temperature groups.
+    
+    Parameters:
+    -----------
+    metrics_history : list of dict
+        List of metrics dictionaries for each iteration
+    cells_changed_history : list
+        List of percentages of cells that changed temperature groups
+    iterations : list
+        List of iteration numbers (default: 1 to n)
+    temp_threshold : float
+        Temperature convergence threshold to plot as horizontal line
+    cells_change_threshold : float
+        Threshold for cells changing temperature groups (percentage)
+    save_fig : bool
+        Whether to save the figure
+    filename : str
+        Output filename if save_fig is True
+    show_fig : bool
+        Whether to display the figure (default: False)
+        
+    Returns:
+    --------
+    None
+    """
+    if not metrics_history or not cells_changed_history:
+        print("No metrics or cells changed data to plot")
+        return
+    
+    # Create iterations list if not provided
+    if iterations is None:
+        iterations = np.arange(1, len(metrics_history) + 1)
+    
+    # Create figure with two subplots sharing the x axis
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 12), sharex=True)
+    
+    # Plot temperature convergence metrics
+    if len(metrics_history) > 0:
+        max_diffs = [m['max_diff'] * 100 for m in metrics_history]
+        mean_diffs = [m['mean_diff'] * 100 for m in metrics_history]
+        median_diffs = [m['median_diff'] * 100 for m in metrics_history]
+        p90_diffs = [m['p90_diff'] * 100 for m in metrics_history]
+        
+        ax1.plot(iterations, max_diffs, 'o-', label='Maximum Difference', color='red', linewidth=2)
+        ax1.plot(iterations, mean_diffs, 's-', label='Mean Difference', color='blue', linewidth=2)
+        ax1.plot(iterations, median_diffs, '^-', label='Median Difference', color='green', linewidth=2)
+        ax1.plot(iterations, p90_diffs, 'x-', label='90th Percentile', color='purple', linewidth=2)
+        
+        # Add horizontal line for temperature threshold
+        ax1.axhline(y=temp_threshold * 100, color='red', linestyle='--', alpha=0.6, 
+                    label=f'Threshold ({temp_threshold * 100:.1f}%)')
+        
+        # Set y-axis to logarithmic scale
+        ax1.set_yscale('log')
+        
+        ax1.set_ylabel('Temperature Difference (%) - Log Scale', fontsize=12)
+        ax1.set_title('Temperature Convergence Metrics', fontsize=14)
+        ax1.grid(True, alpha=0.3)
+        ax1.legend(fontsize=10)
+    
+    # Plot cells changing temperature groups
+    if len(cells_changed_history) > 0:
+        ax2.plot(iterations, cells_changed_history, 'o-', label='Cells Changed Groups', 
+                color='darkblue', linewidth=2, markersize=8)
+        
+        # Add horizontal line at the cells change threshold
+        ax2.axhline(y=cells_change_threshold, color='darkblue', linestyle='--', alpha=0.6, 
+                    label=f'{cells_change_threshold:.1f}% Threshold')
+        
+        ax2.set_xlabel('Iteration', fontsize=12)
+        ax2.set_ylabel('Cells Changed Temperature Group (%)', fontsize=12)
+        ax2.set_title('Cells Changing Temperature Group Between Iterations', fontsize=14)
+        ax2.grid(True, alpha=0.3)
+        ax2.legend(fontsize=10)
+    
+    # Add overall title
+    plt.suptitle('Temperature-Dependent Dust Opacity Convergence Summary', fontsize=16, y=0.98)
+    
+    plt.tight_layout(rect=[0, 0, 1, 0.96])  # Leave room for suptitle
+    
+    if save_fig and filename:
+        plt.savefig(filename, dpi=300, bbox_inches='tight')
+        print(f"Saved temperature-dependent iteration summary to {filename}")
+    
+    if show_fig:
+        plt.show()
+    else:
+        plt.close(fig)
+
 def analyze_temperature_distribution(temp_data, grid_info, species=0, bins=50, 
                                     save_fig=False, filename=None, show_fig=False):
     """
@@ -783,7 +629,8 @@ def analyze_temperature_distribution(temp_data, grid_info, species=0, bins=50,
 def plot_advanced_temperature_density(grid_info=None, temp_data=None, density_data=None, 
                                  output_dir='figures', species=0, slice_phi=0,
                                  temp_contours=20, save_fig=True, show_fig=False,
-                                 iteration=None):
+                                 iteration=None, multi_species_handling='specific',
+                                 create_zone_map=False):
     """
     Create enhanced visualizations of dust temperature and density.
     
@@ -809,6 +656,13 @@ def plot_advanced_temperature_density(grid_info=None, temp_data=None, density_da
         Whether to show figures interactively
     iteration : int, optional
         Iteration number to include in plot titles
+    multi_species_handling : str
+        How to handle multiple species: 'specific' (use the species index),
+        'average' (average over all species), 'weighted_avg' (density-weighted average),
+        or 'all' (plot all species)
+    create_zone_map : bool
+        Whether to create a dedicated temperature zone map highlighting the different
+        temperature regions (below 50K, 50-150K, 150-250K, above 250K)
         
     Returns:
     --------
@@ -870,23 +724,65 @@ def plot_advanced_temperature_density(grid_info=None, temp_data=None, density_da
         X_centers = R_centers * np.sin(Theta_centers)
         Y_centers = R_centers * np.cos(Theta_centers)
         
-        # Handle indexing for slicing based on dimensionality
-        if len(temp_data.shape) == 3:  # 2D case (r, theta, species)
-            # For 2D data, we need to transpose to get (theta, r) for plotting
-            temp_slice = temp_data[:, :, species].T
-            if density_data is not None and len(density_data.shape) == 3:
-                density_slice = density_data[:, :, species].T
+        # Get number of dust species
+        n_species = temp_data.shape[-1]
+        print(f"Number of dust species: {n_species}")
+        
+        # Handle multi-species data based on the specified approach
+        if n_species > 1 and multi_species_handling != 'specific':
+            if multi_species_handling == 'average':
+                # Simple average across all species
+                if len(temp_data.shape) == 3:  # 2D case (r, theta, species)
+                    temp_slice = np.mean(temp_data, axis=2).T
+                else:  # 3D case (r, theta, phi, species)
+                    temp_slice = np.mean(temp_data[:, :, slice_phi, :], axis=2).T
+                
+                species_label = "avg"
+            elif multi_species_handling == 'weighted_avg' and density_data is not None:
+                # Density-weighted average
+                if len(temp_data.shape) == 3:  # 2D case
+                    # Calculate weights
+                    weights = density_data / np.sum(density_data, axis=2, keepdims=True)
+                    # Calculate weighted average
+                    temp_slice = np.sum(temp_data * weights, axis=2).T
+                else:  # 3D case
+                    weights = density_data[:, :, slice_phi, :] / np.sum(density_data[:, :, slice_phi, :], axis=3, keepdims=True)
+                    temp_slice = np.sum(temp_data[:, :, slice_phi, :] * weights, axis=3).T
+                
+                species_label = "weighted"
+            elif multi_species_handling == 'all':
+                # We'll handle this separately (plotting multiple panels)
+                temp_slice = None
+                species_label = "all"
             else:
-                density_data = None
-        elif len(temp_data.shape) == 4:  # 3D case (r, theta, phi, species)
-            # For 3D data, we need to select a phi slice and transpose
-            temp_slice = temp_data[:, :, slice_phi, species].T
-            if density_data is not None and len(density_data.shape) == 4:
-                density_slice = density_data[:, :, slice_phi, species].T
-            else:
-                density_data = None
+                # Fall back to specific species if other methods can't be applied
+                if len(temp_data.shape) == 3:  # 2D case
+                    temp_slice = temp_data[:, :, min(species, n_species-1)].T
+                else:  # 3D case
+                    temp_slice = temp_data[:, :, slice_phi, min(species, n_species-1)].T
+                
+                species_label = str(min(species, n_species-1))
         else:
-            raise ValueError(f"Unexpected temperature data shape: {temp_data.shape}")
+            # Handle single species or specific species from multi-species
+            if len(temp_data.shape) == 3:  # 2D case (r, theta, species)
+                # For 2D data, we need to transpose to get (theta, r) for plotting
+                temp_slice = temp_data[:, :, min(species, n_species-1)].T
+            elif len(temp_data.shape) == 4:  # 3D case (r, theta, phi, species)
+                # For 3D data, we need to select a phi slice and transpose
+                temp_slice = temp_data[:, :, slice_phi, min(species, n_species-1)].T
+            else:
+                raise ValueError(f"Unexpected temperature data shape: {temp_data.shape}")
+            
+            species_label = str(min(species, n_species-1))
+        
+        # Handle density data similarly
+        if density_data is not None:
+            if len(density_data.shape) == 3:  # 2D case
+                density_slice = density_data[:, :, min(species, density_data.shape[2]-1)].T
+            elif len(density_data.shape) == 4:  # 3D case
+                density_slice = density_data[:, :, slice_phi, min(species, density_data.shape[3]-1)].T
+            else:
+                density_data = None
     
     elif grid_info['type'] == 'cartesian':
         # For cartesian coordinates - adjust as needed
@@ -895,98 +791,215 @@ def plot_advanced_temperature_density(grid_info=None, temp_data=None, density_da
         raise ValueError(f"Unknown grid type: {grid_info['type']}")
     
     # 1. Plot density if available
-    if density_data is not None:
+    if density_data is not None and multi_species_handling != 'all':
+        # Skip individual species density plots for intermediate iterations
+        # Only plot for the final result (when iteration is None)
+        if iteration is None:
+            plt.figure(figsize=(10, 8))
+            im = plt.pcolormesh(X/1e15, Y/1e15, 
+                               np.log10(density_slice),
+                               shading='auto')
+            plt.colorbar(im, label='log₁₀(density) [g/cm³]')
+            plt.axis('equal')
+            plt.xlabel('R [1000 AU]')
+            plt.ylabel('z [1000 AU]')
+            
+            plt.title(f'Log Dust Density (R-z plane, species {species_label})')
+                
+            if save_fig:
+                density_filename = os.path.join(output_dir, f'dust_density_species{species_label}')
+                density_filename += '.png'
+                plt.savefig(density_filename, dpi=300, bbox_inches='tight')
+            if not show_fig:
+                plt.close()
+    
+    # Special case for 'all' - create a panel of plots for each species
+    if multi_species_handling == 'all' and n_species > 1:
+        # Determine grid layout
+        n_rows = 2
+        n_cols = (n_species + 1) // 2  # Ceiling division
+        
+        # First create the temperature panel
+        fig = plt.figure(figsize=(12*n_cols/2, 8*n_rows/2))
+        
+        for i in range(n_species):
+            plt.subplot(n_rows, n_cols, i+1)
+            
+            if len(temp_data.shape) == 3:  # 2D case
+                temp_slice_i = temp_data[:, :, i].T
+            else:  # 3D case
+                temp_slice_i = temp_data[:, :, slice_phi, i].T
+            
+            im = plt.pcolormesh(X/1e15, Y/1e15, temp_slice_i, cmap='inferno', shading='auto')
+            plt.colorbar(im, label='Temperature [K]')
+            plt.axis('equal')
+            plt.xlabel('R [1000 AU]')
+            plt.ylabel('z [1000 AU]')
+            plt.title(f'Species {i}')
+        
+        # Create a tight layout
+        plt.tight_layout()
+        
+        # Add a title for the whole figure
+        if iteration is not None:
+            plt.suptitle(f'Dust Temperature - Iteration {iteration} (All Species)', 
+                       fontsize=16, y=0.98)
+        else:
+            plt.suptitle(f'Dust Temperature (All Species)', fontsize=16, y=0.98)
+        
+        if save_fig:
+            temp_filename = os.path.join(output_dir, 'dust_temperature_all_species')
+            if iteration is not None:
+                temp_filename += f'_iter{iteration}'
+            temp_filename += '.png'
+            plt.savefig(temp_filename, dpi=300, bbox_inches='tight')
+        
+        if not show_fig:
+            plt.close()
+            
+        # Now create a density panel if density data is available
+        if density_data is not None:
+            fig = plt.figure(figsize=(12*n_cols/2, 8*n_rows/2))
+            
+            for i in range(n_species):
+                plt.subplot(n_rows, n_cols, i+1)
+                
+                if len(density_data.shape) == 3:  # 2D case
+                    density_slice_i = density_data[:, :, i].T
+                else:  # 3D case
+                    density_slice_i = density_data[:, :, slice_phi, i].T
+                
+                im = plt.pcolormesh(X/1e15, Y/1e15, np.log10(density_slice_i), 
+                                   cmap='viridis', shading='auto')
+                plt.colorbar(im, label='log₁₀(density) [g/cm³]')
+                plt.axis('equal')
+                plt.xlabel('R [1000 AU]')
+                plt.ylabel('z [1000 AU]')
+                plt.title(f'Species {i}')
+            
+            # Create a tight layout
+            plt.tight_layout()
+            
+            # Add a title for the whole figure
+            if iteration is not None:
+                plt.suptitle(f'Dust Density - Iteration {iteration} (All Species)', 
+                           fontsize=16, y=0.98)
+            else:
+                plt.suptitle(f'Dust Density (All Species)', fontsize=16, y=0.98)
+            
+            if save_fig:
+                density_filename = os.path.join(output_dir, 'dust_density_all_species')
+                if iteration is not None:
+                    density_filename += f'_iter{iteration}'
+                density_filename += '.png'
+                plt.savefig(density_filename, dpi=300, bbox_inches='tight')
+            
+            if not show_fig:
+                plt.close()
+        
+        # Create a temperature zone panel (this is done in create_zone_map section)
+    
+    # 2. Plot temperature (standard) - skip if 'all' is chosen
+    if multi_species_handling != 'all':
         plt.figure(figsize=(10, 8))
         im = plt.pcolormesh(X/1e15, Y/1e15, 
-                           np.log10(density_slice),
-                           shading='auto')
-        plt.colorbar(im, label='log₁₀(density) [g/cm³]')
+                          temp_slice,
+                          cmap='inferno', shading='auto')
+        plt.colorbar(im, label='Temperature [K]')
         plt.axis('equal')
         plt.xlabel('R [1000 AU]')
         plt.ylabel('z [1000 AU]')
         
         if iteration is not None:
-            plt.title(f'Log Dust Density - Iteration {iteration} (R-z plane)')
+            plt.title(f'Dust Temperature - Iteration {iteration} (R-z plane, species {species_label})')
         else:
-            plt.title(f'Log Dust Density (R-z plane)')
+            plt.title(f'Dust Temperature (R-z plane, species {species_label})')
             
         if save_fig:
-            plt.savefig(os.path.join(output_dir, 'dust_density.png'), dpi=300)
+            temp_filename = os.path.join(output_dir, f'dust_temperature_species{species_label}')
+            if iteration is not None:
+                temp_filename += f'_iter{iteration}'
+            temp_filename += '.png'
+            plt.savefig(temp_filename, dpi=300, bbox_inches='tight')
+        if not show_fig:
+            plt.close()
+        
+        # 3. Create temperature zone map with contours
+        plt.figure(figsize=(12, 10))
+        
+        # Define temperature zones with distinct colors
+        cmap = plt.cm.colors.ListedColormap(['#3498db', '#2ecc71', '#f39c12', '#e74c3c'])
+        try:
+            max_temp = np.max(temp_slice) if temp_slice is not None else 300
+            bounds = [0, 50, 150, 250, max(300, max_temp)]
+        except (TypeError, ValueError):
+            print("Warning: Could not calculate max temperature from temperature slice - using default bounds")
+            bounds = [0, 50, 150, 250, 300]
+        norm = BoundaryNorm(bounds, cmap.N)
+        
+        # Create the main color zone plot
+        im = plt.pcolormesh(X_centers/1e15, Y_centers/1e15, 
+                          temp_slice,
+                          cmap=cmap, norm=norm, shading='auto')
+        
+        # Add contour lines to show temperature boundaries
+        try:
+            if temp_slice is not None:
+                contours = plt.contour(X_centers/1e15, Y_centers/1e15, temp_slice, 
+                                levels=[50, 150, 250], colors='white', linewidths=1.5)
+                plt.clabel(contours, inline=True, fontsize=10, fmt='%dK')
+        except Exception as e:
+            print(f"Warning: Could not create temperature contours: {e}")
+            # Continue without contours
+        
+        # Add colorbar
+        ticks = [25, min(100, max_temp/2), min(200, max_temp*0.75), min(max_temp*0.9, 300)]
+        cbar = plt.colorbar(im, ticks=ticks)
+        cbar.set_label('Temperature [K]')
+        cbar.ax.set_yticklabels(['<50K', '50-150K', '150-250K', '>250K'])
+        
+        plt.axis('equal')
+        plt.xlabel('R [1000 AU]')
+        plt.ylabel('z [1000 AU]')
+        
+        if iteration is not None:
+            plt.title(f'Dust Temperature Zones - Iteration {iteration} (R-z plane, species {species_label})')
+        else:
+            plt.title(f'Dust Temperature Zones (R-z plane, species {species_label})')
+        
+        if save_fig:
+            zone_filename = os.path.join(output_dir, f'temperature_zones_map_species{species_label}')
+            if iteration is not None:
+                zone_filename += f'_iter{iteration}'
+            zone_filename += '.png'
+            plt.savefig(zone_filename, dpi=300, bbox_inches='tight')
         if not show_fig:
             plt.close()
     
-    # 2. Plot temperature (standard)
-    plt.figure(figsize=(10, 8))
-    im = plt.pcolormesh(X/1e15, Y/1e15, 
-                       temp_slice,
-                       cmap='inferno', shading='auto')
-    plt.colorbar(im, label='Temperature [K]')
-    plt.axis('equal')
-    plt.xlabel('R [1000 AU]')
-    plt.ylabel('z [1000 AU]')
-    
-    if iteration is not None:
-        plt.title(f'Dust Temperature - Iteration {iteration} (R-z plane)')
-    else:
-        plt.title(f'Dust Temperature (R-z plane)')
-        
-    if save_fig:
-        plt.savefig(os.path.join(output_dir, 'dust_temperature.png'), dpi=300)
-    if not show_fig:
-        plt.close()
-    
-    # 3. Create temperature zone map with contours
-    plt.figure(figsize=(12, 10))
-    
-    # Define colors for temperature zones
-    max_temp = np.max(temp_slice)
-    cmap = plt.cm.colors.ListedColormap(['#3498db', '#2ecc71', '#f39c12', '#e74c3c'])
-    bounds = [0, 50, 150, 250, max(300, np.max(temp_slice))]
-    norm = BoundaryNorm(bounds, cmap.N)
-    
-    # Create the main color zone plot
-    im = plt.pcolormesh(X_centers/1e15, Y_centers/1e15, 
-                       temp_slice,
-                       cmap=cmap, norm=norm, shading='auto')
-    
-    # Add contour lines
-    if isinstance(temp_contours, int):
-        contour_levels = np.linspace(0, np.max(temp_slice), temp_contours)
-    else:
-        contour_levels = temp_contours
-        
-    contours = plt.contour(X_centers/1e15, Y_centers/1e15, temp_slice, 
-                         levels=contour_levels, colors='black', alpha=0.5, linewidths=0.5)
-    plt.clabel(contours, inline=True, fontsize=8, fmt='%.0f')
-    
-    # Add colorbar
-    ticks = [25, min(100, max_temp/2), min(200, max_temp*0.75), min(max_temp*0.9, 300)]
-    cbar = plt.colorbar(im, ticks=ticks)
-    cbar.set_label('Temperature [K]')
-    cbar.ax.set_yticklabels(['<50K', '50-150K', '150-250K', '>250K'])
-    
-    plt.axis('equal')
-    plt.xlabel('R [1000 AU]')
-    plt.ylabel('z [1000 AU]')
-    
-    if iteration is not None:
-        plt.title(f'Dust Temperature Zones with Contours - Iteration {iteration} (R-z plane)')
-    else:
-        plt.title(f'Dust Temperature Zones with Contours (R-z plane)')
-    
-    if save_fig:
-        plt.savefig(os.path.join(output_dir, 'temperature_zones_map.png'), dpi=300)
-    if not show_fig:
-        plt.close()
-    
     # 4. Analyze temperature distribution
-    # Flatten the temperature array for the specified dust species
-    if len(temp_data.shape) == 3:  # 2D case (r, theta, species)
-        temp_flat = temp_data[:, :, species].flatten()
-    elif len(temp_data.shape) == 4:  # 3D case (r, theta, phi, species)
-        temp_flat = temp_data[:, :, :, species].flatten()
+    # Flatten the temperature array for the specified dust species (or averaged/all species)
+    if multi_species_handling == 'average':
+        # Use average across all species
+        if len(temp_data.shape) == 3:  # 2D case (r, theta, species)
+            temp_flat = np.mean(temp_data, axis=2).flatten()
+        elif len(temp_data.shape) == 4:  # 3D case (r, theta, phi, species)
+            temp_flat = np.mean(temp_data, axis=3).flatten()
+    elif multi_species_handling == 'weighted_avg' and density_data is not None:
+        # Use density-weighted average
+        if len(temp_data.shape) == 3:  # 2D case
+            weights = density_data / np.sum(density_data, axis=2, keepdims=True)
+            temp_flat = np.sum(temp_data * weights, axis=2).flatten()
+        elif len(temp_data.shape) == 4:  # 3D case
+            weights = density_data / np.sum(density_data, axis=3, keepdims=True)
+            temp_flat = np.sum(temp_data * weights, axis=3).flatten()
     else:
-        raise ValueError(f"Unexpected temperature data shape: {temp_data.shape}")
+        # Use specific species
+        if len(temp_data.shape) == 3:  # 2D case (r, theta, species)
+            temp_flat = temp_data[:, :, min(species, n_species-1)].flatten()
+        elif len(temp_data.shape) == 4:  # 3D case (r, theta, phi, species)
+            temp_flat = temp_data[:, :, :, min(species, n_species-1)].flatten()
+        else:
+            raise ValueError(f"Unexpected temperature data shape: {temp_data.shape}")
     
     # Count cells in different temperature ranges
     below_50K = np.sum(temp_flat < 50)
@@ -996,43 +1009,13 @@ def plot_advanced_temperature_density(grid_info=None, temp_data=None, density_da
     
     # Print the counts and percentages
     total_cells = len(temp_flat)
-    print(f"\nTemperature distribution for dust species {species}:")
-    print(f"Below 50K: {below_50K} cells ({below_50K/total_cells*100:.1f}%)")
-    print(f"50K-150K: {between_50_150K} cells ({between_50_150K/total_cells*100:.1f}%)")
-    print(f"150K-250K: {between_150_250K} cells ({between_150_250K/total_cells*100:.1f}%)")
-    print(f"Above 250K: {above_250K} cells ({above_250K/total_cells*100:.1f}%)")
+    print(f"\nTemperature distribution for {'all species' if multi_species_handling in ['average', 'weighted_avg'] else f'dust species {species_label}'}:")
+    print(f"Below 50K: {below_50K} cells ({below_50K/total_cells*100:.2f}%)")
+    print(f"50K-150K: {between_50_150K} cells ({between_50_150K/total_cells*100:.2f}%)")
+    print(f"150K-250K: {between_150_250K} cells ({between_150_250K/total_cells*100:.2f}%)")
+    print(f"Above 250K: {above_250K} cells ({above_250K/total_cells*100:.2f}%)")
     
-    # 5. Create histogram of temperature distribution
-    plt.figure(figsize=(10, 6))
-    hist_bins = np.linspace(0, max(500, np.max(temp_flat)), 100)
-    plt.hist(temp_flat, bins=hist_bins, alpha=0.7, color='orange')
-    plt.axvline(50, color='r', linestyle='--', alpha=0.7, label='50K')
-    plt.axvline(150, color='g', linestyle='--', alpha=0.7, label='150K')
-    plt.axvline(250, color='b', linestyle='--', alpha=0.7, label='250K')
-    plt.xlabel('Temperature [K]')
-    plt.ylabel('Number of Cells')
-    plt.title(f'Dust Temperature Distribution (species={species})')
-    plt.legend()
-    plt.grid(alpha=0.3)
-    if save_fig:
-        plt.savefig(os.path.join(output_dir, 'temperature_histogram.png'), dpi=300)
-    if not show_fig:
-        plt.close()
-    
-    # 6. Create pie chart of temperature distribution
-    plt.figure(figsize=(8, 8))
-    labels = ['<50K', '50K-150K', '150K-250K', '>250K']
-    sizes = [below_50K, between_50_150K, between_150_250K, above_250K]
-    colors = ['#3498db', '#2ecc71', '#f39c12', '#e74c3c']
-    plt.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90)
-    plt.axis('equal')
-    plt.title('Temperature Distribution by Range')
-    if save_fig:
-        plt.savefig(os.path.join(output_dir, 'temperature_distribution_pie.png'), dpi=300)
-    if not show_fig:
-        plt.close()
-    
-    # Return statistics
+    # Collect stats for return
     stats = {
         'below_50K': below_50K,
         'between_50_150K': between_50_150K,
@@ -1045,7 +1028,224 @@ def plot_advanced_temperature_density(grid_info=None, temp_data=None, density_da
         'median_temperature': np.median(temp_flat)
     }
     
+    # Create a dedicated temperature zone map if requested
+    if create_zone_map:
+        try:
+            # Special case for 'all' species mode
+            if multi_species_handling == 'all' and n_species > 1:
+                # Create a panel of temperature zone maps for each species
+                n_rows = 2
+                n_cols = (n_species + 1) // 2  # Ceiling division
+                
+                fig = plt.figure(figsize=(12*n_cols/2, 8*n_rows/2))
+                
+                # Define temperature zones with distinct colors
+                cmap = plt.cm.colors.ListedColormap(['#3498db', '#2ecc71', '#f39c12', '#e74c3c'])
+                bounds = [0, 50, 150, 250, 300]
+                norm = BoundaryNorm(bounds, cmap.N)
+                
+                for i in range(n_species):
+                    plt.subplot(n_rows, n_cols, i+1)
+                    
+                    # Get temperature slice for this species
+                    if len(temp_data.shape) == 3:  # 2D case
+                        temp_slice_i = temp_data[:, :, i].T
+                    else:  # 3D case
+                        temp_slice_i = temp_data[:, :, slice_phi, i].T
+                    
+                    # Create the temperature zone map for this species
+                    im = plt.pcolormesh(X_centers/1e15, Y_centers/1e15, 
+                                      temp_slice_i,
+                                      cmap=cmap, norm=norm, shading='auto')
+                    
+                    plt.axis('equal')
+                    plt.xlabel('R [1000 AU]', fontsize=8)
+                    plt.ylabel('z [1000 AU]', fontsize=8)
+                    plt.title(f'Species {i}', fontsize=10)
+                
+                # Create a tight layout with space for the colorbar
+                plt.tight_layout(rect=[0, 0, 0.9, 0.9])
+                
+                # Add a colorbar on the side of the existing figure
+                cbar = fig.colorbar(im, ax=fig.axes, orientation='vertical', shrink=0.8)
+                cbar.set_label('Temperature Zones')
+                cbar.set_ticks([25, 100, 200, 275])
+                cbar.set_ticklabels(['< 50K', '50K - 150K', '150K - 250K', '> 250K'])
+                
+                # Add a title for the whole figure
+                if iteration is not None:
+                    plt.suptitle(f'Temperature Zones - Iteration {iteration} (All Species)', 
+                               fontsize=16, y=0.98)
+                else:
+                    plt.suptitle(f'Temperature Zones (All Species)', fontsize=16, y=0.98)
+                
+                if save_fig:
+                    zone_filename = os.path.join(output_dir, 'temperature_zones_map_all_species')
+                    if iteration is not None:
+                        zone_filename += f'_iter{iteration}'
+                    zone_filename += '.png'
+                    plt.savefig(zone_filename, dpi=300, bbox_inches='tight')
+                
+                if not show_fig:
+                    plt.close()
+                
+                return stats
+            
+            # Check if all required variables exist and are valid
+            if temp_slice is None or X_centers is None or Y_centers is None:
+                print("Warning: Cannot create temperature zone map - missing data")
+                return stats
+                
+            # Now proceed with plotting
+            plt.figure(figsize=(12, 10))
+            
+            # Define temperature zones with distinct colors
+            cmap = plt.cm.colors.ListedColormap(['#3498db', '#2ecc71', '#f39c12', '#e74c3c'])
+            try:
+                max_temp = np.max(temp_slice) if temp_slice is not None else 300
+                bounds = [0, 50, 150, 250, max(300, max_temp)]
+            except (TypeError, ValueError):
+                print("Warning: Could not calculate max temperature from temperature slice - using default bounds")
+                bounds = [0, 50, 150, 250, 300]
+            norm = BoundaryNorm(bounds, cmap.N)
+            
+            # Create the temperature zone map
+            im = plt.pcolormesh(X_centers/1e15, Y_centers/1e15, 
+                              temp_slice,
+                              cmap=cmap, norm=norm, shading='auto')
+            
+            # Add a grid for better visibility of zones
+            plt.grid(True, color='white', linestyle='--', alpha=0.3)
+            
+            # Create a custom colorbar with labels for each zone
+            cbar = plt.colorbar(im, ticks=[25, 100, 200, 275])
+            cbar.set_label('Temperature Zones')
+            cbar.ax.set_yticklabels(['< 50K', '50K - 150K', '150K - 250K', '> 250K'])
+            
+            plt.axis('equal')
+            plt.xlabel('R [1000 AU]')
+            plt.ylabel('z [1000 AU]')
+            
+            title_species = "all species" if multi_species_handling in ['average', 'weighted_avg'] else f"species {species_label}"
+            if iteration is not None:
+                plt.title(f'Temperature Zones - Iteration {iteration} ({title_species})')
+            else:
+                plt.title(f'Temperature Zones ({title_species})')
+            
+            if save_fig:
+                zone_filename = os.path.join(output_dir, f'temperature_zones_map_{title_species.replace(" ", "_")}')
+                if iteration is not None:
+                    zone_filename += f'_iter{iteration}'
+                zone_filename += '.png'
+                plt.savefig(zone_filename, dpi=300, bbox_inches='tight')
+            
+            if not show_fig:
+                plt.close()
+        
+        except Exception as e:
+            print(f"Warning: Error creating temperature zone map: {e}")
+            # Continue with function despite visualization error
+    
     return stats
+
+def read_amr_grid(filename='amr_grid.inp'):
+    """
+    Read AMR grid information from a RADMC-3D grid file.
+    
+    Parameters:
+    -----------
+    filename : str
+        Name of the AMR grid file
+        
+    Returns:
+    --------
+    dict
+        Grid information dictionary with grid type, dimensions, and arrays
+    """
+    import numpy as np
+    import os
+    
+    if not os.path.exists(filename):
+        raise FileNotFoundError(f"Grid file {filename} not found")
+    
+    # Read the AMR grid file
+    with open(filename, 'r') as f:
+        iformat = int(f.readline().strip())
+        grid_style = int(f.readline().strip())
+        coordsystem = int(f.readline().strip())
+        gridinfo = int(f.readline().strip())
+        
+        # Read which coordinates are included
+        line = f.readline().strip().split()
+        incl_r = int(line[0])
+        incl_theta = int(line[1])
+        incl_phi = int(line[2]) if len(line) > 2 else 0
+        
+        # Read grid dimensions
+        line = f.readline().strip().split()
+        nr = int(line[0])
+        ntheta = int(line[1])
+        nphi = int(line[2]) if len(line) > 2 else 1
+        
+        # Read cell walls
+        ri = np.zeros(nr+1)
+        for i in range(nr+1):
+            ri[i] = float(f.readline().strip())
+            
+        thetai = np.zeros(ntheta+1)
+        for i in range(ntheta+1):
+            thetai[i] = float(f.readline().strip())
+            
+        phii = np.zeros(nphi+1)
+        for i in range(nphi+1):
+            phii[i] = float(f.readline().strip())
+    
+    # Determine grid type
+    grid_type = 'cartesian'
+    if coordsystem == 100:
+        grid_type = 'spherical'
+    elif coordsystem == 200:
+        grid_type = 'cylindrical'
+        
+    # Calculate cell centers
+    rc = 0.5 * (ri[1:] + ri[:-1])
+    thetac = 0.5 * (thetai[1:] + thetai[:-1])
+    phic = 0.5 * (phii[1:] + phii[:-1])
+    
+    # Create meshgrid for r, theta (for 2D case)
+    rr, tt = np.meshgrid(rc, thetac, indexing='ij')
+    
+    # Create grid info dictionary
+    grid_info = {
+        'type': grid_type,
+        'nr': nr,
+        'ntheta': ntheta,
+        'nphi': nphi,
+        'ri': ri,
+        'thetai': thetai,
+        'phii': phii,
+        'rc': rc,
+        'thetac': thetac,
+        'phic': phic,
+        'rr': rr,
+        'tt': tt
+    }
+    
+    # Add cartesian-specific info
+    if grid_type == 'cartesian':
+        grid_info.update({
+            'nx': nr,
+            'ny': ntheta,
+            'nz': nphi,
+            'xi': ri,
+            'yi': thetai,
+            'zi': phii,
+            'xc': rc,
+            'yc': thetac,
+            'zc': phic
+        })
+    
+    return grid_info
 
 def read_dust_density(filename='dust_density.inp', grid_info=None):
     """
@@ -1137,4 +1337,346 @@ def read_dust_density(filename='dust_density.inp', grid_info=None):
         return densities, grid_info, nrcells, nrspec
         
     except Exception as e:
-        raise Exception(f"Error reading dust density file: {e}") 
+        raise Exception(f"Error reading dust density file: {e}")
+
+def redistribute_density_by_temperature(temp_data, original_density, grid_info, temp_ranges=[50, 150, 250]):
+    """
+    Redistribute dust density based on temperature zones.
+    
+    Parameters:
+    -----------
+    temp_data : ndarray
+        Temperature data from read_dust_temperature()
+    original_density : ndarray
+        Original dust density data with single species
+    grid_info : dict
+        Grid information dictionary
+    temp_ranges : list
+        Temperature range boundaries [t1, t2, t3] creating zones:
+        - below t1: use 10K opacities
+        - t1 to t2: use 100K opacities
+        - t2 to t3: use 200K opacities
+        - above t3: use 300K opacities
+        
+    Returns:
+    --------
+    ndarray
+        New dust density array with 4 species distributed by temperature
+    """
+    import numpy as np
+    import os
+    
+    # Determine dimensionality
+    if grid_info['type'] == 'spherical':
+        nr = grid_info['nr']
+        ntheta = grid_info['ntheta']
+        nphi = grid_info.get('nphi', 1)  # Default to 1 if not present (2D case)
+    elif grid_info['type'] == 'cartesian':
+        nr = grid_info['nx']
+        ntheta = grid_info['ny']
+        nphi = grid_info['nz']
+    else:
+        raise ValueError(f"Unknown grid type: {grid_info['type']}")
+    
+    # Print debug info about array shapes
+    print(f"Temperature data shape: {temp_data.shape}")
+    print(f"Original density shape: {original_density.shape}")
+    
+    # Create new density array for 4 species
+    if len(temp_data.shape) == 3:  # 2D case [nr, ntheta, nspec]
+        new_density = np.zeros((nr, ntheta, 4))
+        
+        # Extract temperature for the first species (or the only species)
+        temp = temp_data[:, :, 0]
+        
+        # Extract original density (checking dimension and shape)
+        if len(original_density.shape) == 3 and original_density.shape[2] > 1:
+            # If original density already has multiple species, sum them
+            orig_dens = np.sum(original_density, axis=2)
+        elif len(original_density.shape) == 3:
+            # Single species in third dimension
+            orig_dens = original_density[:, :, 0]
+        elif len(original_density.shape) == 2:
+            # No species dimension
+            orig_dens = original_density
+        else:
+            raise ValueError(f"Unexpected original density shape: {original_density.shape}")
+        
+        # Create masks for each temperature range
+        mask_10K = temp < temp_ranges[0]
+        mask_100K = (temp >= temp_ranges[0]) & (temp < temp_ranges[1])
+        mask_200K = (temp >= temp_ranges[1]) & (temp < temp_ranges[2])
+        mask_300K = temp >= temp_ranges[2]
+        
+        # Distribute density based on temperature
+        new_density[:, :, 0] = np.where(mask_10K, orig_dens, 0)
+        new_density[:, :, 1] = np.where(mask_100K, orig_dens, 0)
+        new_density[:, :, 2] = np.where(mask_200K, orig_dens, 0)
+        new_density[:, :, 3] = np.where(mask_300K, orig_dens, 0)
+        
+    elif len(temp_data.shape) == 4:  # 3D case [nr, ntheta, nphi, nspec]
+        new_density = np.zeros((nr, ntheta, nphi, 4))
+        
+        # Extract temperature for the first species (or the only species)
+        temp = temp_data[:, :, :, 0]
+        
+        # Extract original density (checking dimension and shape)
+        if len(original_density.shape) == 4 and original_density.shape[3] > 1:
+            # If original density already has multiple species, sum them
+            orig_dens = np.sum(original_density, axis=3)
+        elif len(original_density.shape) == 4:
+            # Single species in fourth dimension
+            orig_dens = original_density[:, :, :, 0]
+        elif len(original_density.shape) == 3:
+            # No species dimension
+            orig_dens = original_density
+        else:
+            raise ValueError(f"Unexpected original density shape: {original_density.shape}")
+        
+        # Create masks for each temperature range
+        mask_10K = temp < temp_ranges[0]
+        mask_100K = (temp >= temp_ranges[0]) & (temp < temp_ranges[1])
+        mask_200K = (temp >= temp_ranges[1]) & (temp < temp_ranges[2])
+        mask_300K = temp >= temp_ranges[2]
+        
+        # Distribute density based on temperature
+        new_density[:, :, :, 0] = np.where(mask_10K, orig_dens, 0)
+        new_density[:, :, :, 1] = np.where(mask_100K, orig_dens, 0)
+        new_density[:, :, :, 2] = np.where(mask_200K, orig_dens, 0)
+        new_density[:, :, :, 3] = np.where(mask_300K, orig_dens, 0)
+    
+    # Print statistics for debugging
+    print("\nDust density distribution by temperature:")
+    print(f"Below {temp_ranges[0]}K (10K opacities): {np.count_nonzero(new_density[..., 0])} cells")
+    print(f"{temp_ranges[0]}-{temp_ranges[1]}K (100K opacities): {np.count_nonzero(new_density[..., 1])} cells")
+    print(f"{temp_ranges[1]}-{temp_ranges[2]}K (200K opacities): {np.count_nonzero(new_density[..., 2])} cells")
+    print(f"Above {temp_ranges[2]}K (300K opacities): {np.count_nonzero(new_density[..., 3])} cells")
+    
+    return new_density
+
+def write_temp_dependent_density(new_density, grid_info, filename='dust_density.inp'):
+    """
+    Write the temperature-dependent dust density to file.
+    
+    Parameters:
+    -----------
+    new_density : ndarray
+        New dust density array with multiple species
+    grid_info : dict
+        Grid information dictionary
+    filename : str
+        Output filename
+        
+    Returns:
+    --------
+    None
+        Writes the dust_density.inp file
+    """
+    # Calculate total number of cells
+    if grid_info['type'] == 'spherical':
+        nr = grid_info['nr']
+        ntheta = grid_info['ntheta']
+        nphi = grid_info.get('nphi', 1)  # Default to 1 if not present (2D case)
+    elif grid_info['type'] == 'cartesian':
+        nr = grid_info['nx']
+        ntheta = grid_info['ny']
+        nphi = grid_info['nz']
+    else:
+        raise ValueError(f"Unknown grid type: {grid_info['type']}")
+    
+    total_cells = nr * ntheta * nphi
+    n_species = new_density.shape[-1]
+    
+    # Write the dust density file
+    with open(filename, 'w') as f:
+        f.write('1\n')                # Format number
+        f.write(f'{total_cells}\n')   # Number of cells
+        f.write(f'{n_species}\n')     # Number of dust species
+        
+        # Write flattened density data for each species
+        for ispec in range(n_species):
+            if len(new_density.shape) == 3:  # 2D case [nr, ntheta, nspec]
+                data = new_density[:, :, ispec].ravel(order='F')
+            else:  # 3D case [nr, ntheta, nphi, nspec]
+                data = new_density[:, :, :, ispec].ravel(order='F')
+                
+            for value in data:
+                f.write(f'{value:13.6e}\n')
+    
+    print(f"Wrote temperature-dependent dust density file with {n_species} species to {filename}")
+
+def plot_initial_dust_density(grid_info=None, density_data=None, output_dir='figures', 
+                              save_fig=True, show_fig=False, slice_phi=0,
+                              add_annotations=True, cmap='viridis'):
+    """
+    Create a clear visualization of the initial dust density structure with detailed annotations.
+    
+    Parameters:
+    -----------
+    grid_info : dict, optional
+        Grid information dictionary
+    density_data : ndarray, optional
+        Density data array
+    output_dir : str
+        Directory to save the figure
+    save_fig : bool
+        Whether to save the figure
+    show_fig : bool
+        Whether to show the figure
+    slice_phi : int
+        Phi slice index for 3D data
+    add_annotations : bool
+        Whether to add detailed annotations to the plot
+    cmap : str
+        Colormap to use
+        
+    Returns:
+    --------
+    dict or None
+        Dictionary with density statistics if successful, None otherwise
+    """
+    try:
+        import matplotlib.pyplot as plt
+        import numpy as np
+        import os
+        
+        # Create output directory if it doesn't exist
+        if save_fig and not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        
+        # Get grid info if not provided
+        if grid_info is None:
+            try:
+                grid_info = read_amr_grid()
+            except Exception as e:
+                print(f"Error reading grid information: {e}")
+                return None
+        
+        # Get density data if not provided
+        if density_data is None:
+            try:
+                density_data, _, _, _ = read_dust_density(grid_info=grid_info)
+            except Exception as e:
+                print(f"Error reading density data: {e}")
+                return None
+        
+        # Check grid type
+        if grid_info['type'] != 'spherical':
+            print("Error: Only spherical coordinates are supported for dust density plots")
+            return None
+        
+        # Create coordinate grid for visualization (R-z plane)
+        r = grid_info['rc']
+        theta = grid_info['thetac']
+        
+        # Create meshgrid
+        R, T = np.meshgrid(r, theta, indexing='ij')
+        
+        # Convert to Cartesian for visualization
+        X = R * np.sin(T)
+        Y = R * np.cos(T)
+        
+        # Extract 2D density slice based on shape
+        if len(density_data.shape) == 2:
+            # Already 2D data
+            density_slice = density_data
+        elif len(density_data.shape) == 3 and density_data.shape[-1] == 1:
+            # 2D with species
+            density_slice = density_data[:, :, 0]
+        elif len(density_data.shape) == 3:
+            # 3D data, take slice at phi=slice_phi
+            density_slice = density_data[:, :, slice_phi]
+        elif len(density_data.shape) == 4 and density_data.shape[-1] == 1:
+            # 3D with species, take slice at phi=slice_phi
+            density_slice = density_data[:, :, slice_phi, 0]
+        else:
+            print(f"Unsupported density data shape: {density_data.shape}")
+            return None
+        
+        # Transpose if needed (make sure dimensions match the meshgrid)
+        if X.shape != density_slice.shape:
+            density_slice = density_slice.T
+        
+        # Create figure
+        plt.figure(figsize=(16, 14))
+        
+        # Find appropriate colormap range (log scale)
+        try:
+            # Filter out zeros before taking log
+            non_zero = density_slice[density_slice > 0]
+            if len(non_zero) > 0:
+                vmin = np.log10(np.min(non_zero))
+                vmax = np.log10(np.max(non_zero))
+            else:
+                # If no non-zero values, use a default range
+                vmin, vmax = -20, -10
+        except Exception:
+            vmin, vmax = -20, -10
+        
+        # Create the plot with log scale
+        pcm = plt.pcolormesh(X/au, Y/au, np.log10(density_slice),
+                      cmap=cmap, shading='auto', vmin=vmin, vmax=vmax)
+        
+        # Add colorbar
+        cbar = plt.colorbar(pcm, pad=0.01)
+        cbar.set_label('log₁₀(density) [g/cm³]', size=14)
+        
+        # Add detailed annotations if requested
+        if add_annotations:
+            # Calculate statistics for annotations
+            min_density = np.min(density_slice[density_slice > 0])
+            max_density = np.max(density_slice)
+            mean_density = np.mean(density_slice[density_slice > 0])
+            median_density = np.median(density_slice[density_slice > 0])
+            
+            # Create stats dictionary for return
+            stats = {
+                'min_density': min_density,
+                'max_density': max_density,
+                'mean_density': mean_density,
+                'median_density': median_density
+            }
+            
+            # Add annotations showing model structure
+            plt.annotate('Outflow Cavity', xy=(0, 0.9*np.max(Y)/au), xytext=(0.5*np.max(X)/au, 0.9*np.max(Y)/au),
+                        arrowprops=dict(facecolor='white', shrink=0.05, width=2, headwidth=8),
+                        color='white', fontsize=12)
+            
+            plt.annotate('Equatorial Torus', xy=(0.5*np.max(X)/au, 0), xytext=(0.7*np.max(X)/au, 0.2*np.max(Y)/au),
+                        arrowprops=dict(facecolor='white', shrink=0.05, width=2, headwidth=8),
+                        color='white', fontsize=12)
+            
+            # Add text box with density statistics
+            stats_text = f"Density Statistics:\n" \
+                         f"Min: {min_density:.2e} g/cm³\n" \
+                         f"Max: {max_density:.2e} g/cm³\n" \
+                         f"Mean: {mean_density:.2e} g/cm³\n" \
+                         f"Median: {median_density:.2e} g/cm³"
+            
+            plt.text(0.02, 0.02, stats_text, transform=plt.gca().transAxes,
+                    fontsize=12, verticalalignment='bottom', horizontalalignment='left',
+                    bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.7))
+        else:
+            stats = None
+        
+        # Add axis labels and title
+        plt.xlabel('Radius [AU]', size=14)
+        plt.ylabel('z [AU]', size=14)
+        plt.title('Initial Dust Density Structure', size=16)
+        plt.axis('equal')
+        plt.grid(True, linestyle='--', alpha=0.3)
+        
+        # Save figure if requested
+        if save_fig:
+            filename = f"{output_dir}/initial_dust_density_annotated.png"
+            plt.savefig(filename, dpi=300, bbox_inches='tight')
+        
+        # Show or close figure
+        if not show_fig:
+            plt.close()
+        
+        return stats
+        
+    except Exception as e:
+        print(f"Error in plot_initial_dust_density function: {e}")
+        return None
