@@ -182,6 +182,18 @@ To skip temperature calculation and use an existing temperature file:
 python main_radmc3d.py --use_existing_temperature --temperature_file path/to/dust_temperature.dat --compute_sed --inclination 45 --phi 90
 ```
 
+To only compute SED using existing dust temperature file (SED-only mode):
+
+```bash
+python main_radmc3d.py --sed_only --inclination 45 --phi 90
+```
+
+To compute SED in a different directory than the default:
+
+```bash
+python main_radmc3d.py --sed_only --output_dir my_model_dir --inclination 45 --phi 90
+```
+
 **Important Note**: When using an existing `dust_temperature.dat` file, ensure that your `radmc3d.inp` and `dust_density.inp` files are consistent with it, particularly regarding the number of dust species. These three files are interdependent:
 - `dust_temperature.dat` contains temperature data for each dust species
 - `dust_density.inp` contains density data for each dust species
@@ -195,6 +207,30 @@ To visualize results with different multi-species handling:
 
 ```bash
 python main_radmc3d.py --advanced_plots --multi_species_handling all
+```
+
+To generate advanced plots from existing data without rerunning any calculations:
+
+```bash
+python main_radmc3d.py --plot_only
+```
+
+To generate plots with specific visualization options:
+
+```bash
+python main_radmc3d.py --plot_only --output_dir my_model_dir --figures_dir custom_figures --multi_species_handling weighted_avg --species_index 2
+```
+
+To read input files from one directory and save plots to another:
+
+```bash
+python main_radmc3d.py --plot_only --input_dir existing_model_dir --output_dir new_plots_dir --figures_dir temperature_plots
+```
+
+To compute SED from data in one directory and save results to another:
+
+```bash
+python main_radmc3d.py --sed_only --input_dir simulation_data --output_dir sed_results --inclination 45 --phi 90
 ```
 
 ## Command Line Arguments
@@ -250,6 +286,7 @@ python main_radmc3d.py --advanced_plots --multi_species_handling all
 
 #### SED Calculation Parameters
 - `--no_compute_sed`: Disable SED computation after temperature calculation (enabled by default)
+- `--sed_only`: Only compute SED using existing dust_temperature.dat file (skips temperature calculation)
 - `--inclination`: Observer's inclination angle in degrees (default: 0)
 - `--phi`: Observer's azimuthal angle in degrees (default: 0)
 - `--no_sloppy`: Disable the "sloppy" option in SED calculation for more accurate but slower results
@@ -274,10 +311,12 @@ The safest approach is to use files that were generated together in a previous c
 - `--advanced_plots`: Create enhanced visualizations (default: False)
 - `--figures_dir`: Directory to save figures (default: "figures")
 - `--save_iter_plots`: Save plots for each iteration (default: False)
+- `--plot_only`: Only generate plots from existing data without running temperature calculations
+- `--input_dir`: Directory containing existing data files to read (for use with --plot_only or --sed_only)
+- `--output_dir`: Directory to save outputs (default: "radmc3d_model")
 - `--species_index`: Dust species index to plot (0-3, default: 0)
 - `--multi_species_handling`: Method for handling multiple species in plots (default: "specific")
 - `--no_plots`: Disable plotting (default: False)
-- `--output_dir`: Output directory name (default: "radmc3d_model")
 
 The `--multi_species_handling` option controls how multiple dust species are displayed in plots:
 - `specific`: Show only the species specified by `--species_index` (default)
