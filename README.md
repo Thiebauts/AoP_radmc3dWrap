@@ -367,3 +367,17 @@ The code provides several visualization options for multi-species models:
 ## References
 
 - [RADMC-3D Manual](https://www.ita.uni-heidelberg.de/~dullemond/software/radmc-3d/manual_radmc3d/index.html) 
+
+## Version History
+
+### v1.0.0
+- Initial release of the iterative dust temperature calculation framework
+- Water fountain model implementation with torus and bipolar outflow components
+- Basic temperature convergence checking and visualization
+
+### v1.1.0
+- Enhanced main_radmc3d.py with new command line arguments for SED-only and plot-only modes
+- Added ability to compute SED from existing data without rerunning temperature calculations
+- Added visualization-only mode to generate plots from existing data
+- Improved error handling for file operations
+- Added configurable scattering mode through new `--scattering_mode_max` command line argument
