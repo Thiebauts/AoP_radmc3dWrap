@@ -366,32 +366,80 @@ def copy_dust_opacity(dust_file='dustkapscatmat_E40R_300K_a0.3.inp',
             print(f"  {file}")
         raise
 
-def create_single_dust_opacity(extension='E40R_300K_a0.3'):
+def create_single_dust_opacity(dust_material='E40R', dust_temperature='300K', dust_size=0.3):
     """
     Create a dustopac.inp file for RADMC-3D with a single dust species.
     
     Parameters:
     -----------
-    extension : str
-        Extension of the dust opacity file (e.g., 'E40R_300K_a0.3')
+    dust_material : str
+        Dust material composition (e.g., 'E40R')
+    dust_temperature : str
+        Temperature label for the dust (e.g., '300K')
+    dust_size : float
+        Characteristic dust grain size in microns
         
     Returns:
     --------
     None
         Writes the dustopac.inp file
     """
+    extension = f"{dust_material}_{dust_temperature}_a{dust_size}"
+    
     with open('dustopac.inp', 'w') as f:
-        f.write('2\n')
-        f.write('1\n')
+        f.write('2\n')  # Format number
+        f.write('1\n')  # Number of dust species
         f.write('============================================================================\n')
-        f.write('10\n')
-        f.write('0\n')
-        f.write(f'{extension}\n')
+        f.write('10\n')  # Method for this dust species (10=full scattering matrix)
+        f.write('0\n')   # 0=thermal grain
+        f.write(f'{extension}\n')  # Extension of dust opacity file
         f.write('----------------------------------------------------------------------------\n')
     
     print(f"Created dustopac.inp with single dust species: {extension}")
 
-def create_dustopac(nspecies=1, scattering_mode=1, water_fountain=False, temp_dependent=False):
+def verify_dust_opacity_files(dust_material='E40R', dust_size=0.3, temp_dependent=False):
+    """
+    Verify that the required dust opacity files exist.
+    
+    Parameters:
+    -----------
+    dust_material : str
+        Dust material composition (e.g., 'E40R')
+    dust_size : float
+        Characteristic dust grain size in microns
+    temp_dependent : bool
+        If True, check for temperature-dependent files (10K, 100K, 200K, 300K)
+        
+    Returns:
+    --------
+    tuple
+        (exist, missing_files) where exist is a boolean and missing_files is a list
+    """
+    required_files = []
+    
+    if temp_dependent:
+        # For temperature-dependent mode, we need 4 files
+        required_files = [
+            f'dustkapscatmat_{dust_material}_10K_a{dust_size}.inp',
+            f'dustkapscatmat_{dust_material}_100K_a{dust_size}.inp',
+            f'dustkapscatmat_{dust_material}_200K_a{dust_size}.inp',
+            f'dustkapscatmat_{dust_material}_300K_a{dust_size}.inp'
+        ]
+    else:
+        # For single-species mode, we need 1 file
+        required_files = [f'dustkapscatmat_{dust_material}_300K_a{dust_size}.inp']
+    
+    # Check for missing files
+    missing_files = []
+    for file in required_files:
+        if not os.path.exists(file):
+            missing_files.append(file)
+    
+    # Return whether all files exist and list of missing files
+    return len(missing_files) == 0, missing_files
+
+def create_dustopac(nspecies=1, scattering_mode=1, water_fountain=False, temp_dependent=False, 
+                   dust_material='E40R', dust_size=0.3):
     """
     Create a dustopac.inp file for RADMC-3D.
     
@@ -405,12 +453,27 @@ def create_dustopac(nspecies=1, scattering_mode=1, water_fountain=False, temp_de
         If True, uses the special water fountain dust opacity format
     temp_dependent : bool
         If True, create temperature-dependent dust opacities for 4 temperature ranges
+    dust_material : str
+        Dust material composition (e.g., 'E40R')
+    dust_size : float
+        Characteristic dust grain size in microns
         
     Returns:
     --------
     None
         Writes the dustopac.inp file
     """
+    # Verify required files exist
+    if temp_dependent or water_fountain:
+        files_exist, missing_files = verify_dust_opacity_files(dust_material, dust_size, temp_dependent)
+        
+        if not files_exist:
+            print(f"WARNING: Not all required dust opacity files exist for material {dust_material} and size {dust_size}μm")
+            print("Missing files:")
+            for file in missing_files:
+                print(f"  - {file}")
+            print("Using available files, but RADMC-3D calculation may fail.")
+    
     if temp_dependent:
         # Temperature-dependent dust opacities for 4 temperature ranges
         with open('dustopac.inp', 'w') as f:
@@ -424,25 +487,25 @@ def create_dustopac(nspecies=1, scattering_mode=1, water_fountain=False, temp_de
             # 10K opacities (for T < 50K)
             f.write('10\n')
             f.write('0\n')
-            f.write('E40R_10K_a0.3\n')
+            f.write(f'{dust_material}_10K_a{dust_size}\n')
             f.write('----------------------------------------------------------------------------\n')
             
             # 100K opacities (for 50K <= T < 150K) - no ============= separator
             f.write('10\n')
             f.write('0\n')
-            f.write('E40R_100K_a0.3\n')
+            f.write(f'{dust_material}_100K_a{dust_size}\n')
             f.write('----------------------------------------------------------------------------\n')
             
             # 200K opacities (for 150K <= T < 250K) - no ============= separator
             f.write('10\n')
             f.write('0\n')
-            f.write('E40R_200K_a0.3\n')
+            f.write(f'{dust_material}_200K_a{dust_size}\n')
             f.write('----------------------------------------------------------------------------\n')
             
             # 300K opacities (for T >= 250K) - no ============= separator
             f.write('10\n')
             f.write('0\n')
-            f.write('E40R_300K_a0.3\n')
+            f.write(f'{dust_material}_300K_a{dust_size}\n')
             f.write('----------------------------------------------------------------------------\n')
     elif water_fountain:
         # Water fountain specific dust opacity
@@ -452,7 +515,7 @@ def create_dustopac(nspecies=1, scattering_mode=1, water_fountain=False, temp_de
             f.write('============================================================================\n')
             f.write('10\n')
             f.write('0\n')
-            f.write('E40R_300K_a0.3\n')
+            f.write(f'{dust_material}_300K_a{dust_size}\n')
             f.write('----------------------------------------------------------------------------\n')
     else:
         # Standard dust opacity setup
@@ -525,7 +588,7 @@ def setup_water_fountain_model(rin=100*au, rout=5000*au, nr=1000, ntheta=150,
                              Mdtorus=1.0/200, Mdlobe=0.1/200, 
                              Rtorus=1000*au, A=1, B=3, C=0, D=10, E=3, F=2,
                              Rlobe=2500*au, oangle=np.pi/10, width=0.005,
-                             scattering_mode_max=1):
+                             scattering_mode_max=1, dust_material='E40R', dust_size=0.3):
     """
     Set up a complete water fountain model with torus and outflow lobes.
     
@@ -561,6 +624,10 @@ def setup_water_fountain_model(rin=100*au, rout=5000*au, nr=1000, ntheta=150,
         Width parameter for the outflow lobes
     scattering_mode_max : int
         Maximum scattering mode (0=no scattering, 1=isotropic, 2=anisotropic)
+    dust_material : str
+        Dust material composition (e.g., 'E40R')
+    dust_size : float
+        Characteristic dust grain size in microns
         
     Returns:
     --------
@@ -602,10 +669,11 @@ def setup_water_fountain_model(rin=100*au, rout=5000*au, nr=1000, ntheta=150,
                 pos=[0.0, 0.0, 0.0], water_fountain=True)
     
     # Copy the dust opacity file
-    copy_dust_opacity()
+    dust_file = f'dustkapscatmat_{dust_material}_300K_a{dust_size}.inp'
+    copy_dust_opacity(dust_file=dust_file)
     
     # Create the dust opacity control file
-    create_dustopac(water_fountain=True)
+    create_dustopac(water_fountain=True, dust_material=dust_material, dust_size=dust_size)
     
     # Create the RADMC-3D control file
     create_radmc3d_control(
@@ -858,13 +926,18 @@ def setup_model(grid_type='cartesian', model_type='water_fountain', **kwargs):
         # Get scattering_mode_max with default value 1
         scattering_mode_max = kwargs.get('scattering_mode_max', 1)
         
+        # Get dust material and size parameters
+        dust_material = kwargs.get('dust_material', 'E40R')
+        dust_size = kwargs.get('dust_size', 0.3)
+        
         return setup_water_fountain_model(
             rin=rin, rout=rout, nr=nr, ntheta=ntheta,
             stellar_radius=stellar_radius, stellar_mass=stellar_mass, stellar_temp=stellar_temp,
             Mdtorus=Mdtorus, Mdlobe=Mdlobe,
             Rtorus=Rtorus, A=A, B=B, C=C, D=D, E=E, F=F,
             Rlobe=Rlobe, oangle=oangle, width=width,
-            scattering_mode_max=scattering_mode_max
+            scattering_mode_max=scattering_mode_max,
+            dust_material=dust_material, dust_size=dust_size
         )
     else:
         # Extract common parameters
@@ -874,6 +947,10 @@ def setup_model(grid_type='cartesian', model_type='water_fountain', **kwargs):
         stellar_temp = kwargs.get('stellar_temp', 5780.0)
         dust_file = kwargs.get('dust_file', 'dustkapscatmat_E40R_300K_a0.3.inp')
         scattering_mode = kwargs.get('scattering_mode', 1)
+        
+        # Get dust material and size parameters
+        dust_material = kwargs.get('dust_material', 'E40R')
+        dust_size = kwargs.get('dust_size', 0.3)
         
         # Create wavelength grid
         lam_min = kwargs.get('lam_min', 0.1)
@@ -914,10 +991,14 @@ def setup_model(grid_type='cartesian', model_type='water_fountain', **kwargs):
         else:
             raise ValueError(f"Unknown model type: {model_type}")
         
+        # Generate dust file name based on parameters if not explicitly provided
+        if dust_file == 'dustkapscatmat_E40R_300K_a0.3.inp':
+            dust_file = f'dustkapscatmat_{dust_material}_300K_a{dust_size}.inp'
+        
         # Setup dust opacities
         for i in range(nspecies):
             copy_dust_opacity(dust_file, f'dust_kapscatmat_{i+1}.inp')
-        create_dustopac(nspecies, scattering_mode)
+        create_dustopac(nspecies, scattering_mode, dust_material=dust_material, dust_size=dust_size)
         
         # Create star
         create_stars(stellar_radius, stellar_temp)
@@ -933,7 +1014,7 @@ def setup_model(grid_type='cartesian', model_type='water_fountain', **kwargs):
         print(f"Model setup complete. Type: {model_type} on {grid_type} grid. Ready to run RADMC-3D.")
         return grid, rho
 
-def copy_temp_dependent_dust_opacities(base_path='.'):
+def copy_temp_dependent_dust_opacities(base_path='.', dust_material='E40R', dust_size=0.3):
     """
     Copy temperature-dependent dust opacity files to the current directory.
     
@@ -941,18 +1022,21 @@ def copy_temp_dependent_dust_opacities(base_path='.'):
     -----------
     base_path : str
         Path where the dust opacity files are located
+    dust_material : str
+        Dust material composition (e.g., 'E40R')
+    dust_size : float
+        Characteristic dust grain size in microns
         
     Returns:
     --------
     bool
         True if all files were copied successfully, False otherwise
     """
-    # List of required dust opacity files
+    # List of required dust opacity files with template naming
+    temperature_values = ['10K', '100K', '200K', '300K']
+    
     opacity_files = [
-        'dustkapscatmat_E40R_10K_a0.3.inp',
-        'dustkapscatmat_E40R_100K_a0.3.inp',
-        'dustkapscatmat_E40R_200K_a0.3.inp',
-        'dustkapscatmat_E40R_300K_a0.3.inp'
+        f'dustkapscatmat_{dust_material}_{temp}_a{dust_size}.inp' for temp in temperature_values
     ]
     
     # First check if any of the files already exist in the current directory
@@ -971,71 +1055,85 @@ def copy_temp_dependent_dust_opacities(base_path='.'):
         print("All required opacity files found in current directory.")
         return True
     
-    # If not all files are in current directory, check the source directory
-    source_files = []
+    # If not all files are in current directory, check different potential sources
+    # 1. First check the specified base_path
+    base_path_files = []
     for file in opacity_files:
         source = os.path.join(base_path, file)
         if os.path.exists(source):
-            source_files.append(file)
+            base_path_files.append(file)
     
-    print(f"Found {len(source_files)} opacity files in {base_path}:")
-    for file in source_files:
-        print(f"  - {file}")
+    if base_path_files:
+        print(f"Found {len(base_path_files)} opacity files in {base_path}:")
+        for file in base_path_files:
+            print(f"  - {file}")
     
-    # Copy the files that don't already exist
+    # 2. Check if there's an optool_output directory in the base_path
+    optool_output_dir = os.path.join(base_path, "optool_output")
+    optool_output_files = []
+    
+    if os.path.exists(optool_output_dir):
+        for file in opacity_files:
+            source = os.path.join(optool_output_dir, file)
+            if os.path.exists(source):
+                optool_output_files.append(file)
+        
+        if optool_output_files:
+            print(f"Found {len(optool_output_files)} opacity files in {optool_output_dir}:")
+            for file in optool_output_files:
+                print(f"  - {file}")
+    
+    # Copy files from all potential sources
     success = True
+    missing_after_copy = []
+    
     for file in opacity_files:
-        if file not in existing_files:
-            source = os.path.join(base_path, file)
+        if file in existing_files:
+            # Already in current directory
+            continue
+        
+        # Try to copy from various sources
+        copied = False
+        
+        # Try base_path
+        source = os.path.join(base_path, file)
+        if os.path.exists(source) and not copied:
             try:
-                if os.path.exists(source):
-                    shutil.copy(source, file)
-                    print(f"Copied {file}")
-                else:
-                    print(f"Warning: Dust file {file} not found in {base_path}")
-                    success = False
+                shutil.copy(source, file)
+                print(f"Copied {file} from {base_path}")
+                copied = True
             except Exception as e:
-                print(f"Error copying {file}: {e}")
-                success = False
+                print(f"Error copying {file} from {base_path}: {e}")
+        
+        # Try optool_output in base_path
+        if os.path.exists(optool_output_dir) and not copied:
+            source = os.path.join(optool_output_dir, file)
+            if os.path.exists(source):
+                try:
+                    shutil.copy(source, file)
+                    print(f"Copied {file} from {optool_output_dir}")
+                    copied = True
+                except Exception as e:
+                    print(f"Error copying {file} from {optool_output_dir}: {e}")
+        
+        # If still not copied, file is missing
+        if not copied:
+            print(f"Warning: Dust file {file} not found in {base_path}")
+            missing_after_copy.append(file)
+            success = False
     
     # Final verification
-    all_files_exist = all(os.path.exists(file) for file in opacity_files)
-    
-    if all_files_exist:
-        print("All opacity files are available in the current directory.")
+    if len(missing_after_copy) == 0:
+        print("All opacity files are now available in the current directory.")
         return True
     else:
-        print("WARNING: Not all opacity files were found or copied.")
+        print(f"WARNING: Not all opacity files were found or copied.")
+        print(f"Found {len(opacity_files) - len(missing_after_copy)} of {len(opacity_files)} required files.")
         print("Current directory contents:")
         for file in os.listdir('.'):
             if file.startswith('dustkap'):
                 print(f"  - {file}")
         return False
-
-def create_single_dust_opacity(extension='E40R_300K_a0.3'):
-    """
-    Create a dustopac.inp file for RADMC-3D with a single dust species.
-    
-    Parameters:
-    -----------
-    extension : str
-        Extension of the dust opacity file (e.g., 'E40R_300K_a0.3')
-        
-    Returns:
-    --------
-    None
-        Writes the dustopac.inp file
-    """
-    with open('dustopac.inp', 'w') as f:
-        f.write('2\n')  # Format number
-        f.write('1\n')  # Number of dust species
-        f.write('============================================================================\n')
-        f.write('10\n')  # Method for this dust species (10=full scattering matrix)
-        f.write('0\n')   # 0=thermal grain
-        f.write(f'{extension}\n')  # Extension of dust opacity file
-        f.write('----------------------------------------------------------------------------\n')
-    
-    print(f"Created dustopac.inp with single dust species: {extension}") 
 
 def verify_dust_temperature_file(filepath='dust_temperature.dat'):
     """

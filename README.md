@@ -273,6 +273,29 @@ python main_radmc3d.py --sed_only --input_dir simulation_data --output_dir sed_r
   - 0: No scattering (absorption only)
   - 1: Isotropic scattering
   - 2-3-4-5: Anisotropic scattering (see RADMC-3D Documentation)
+- `--dust_material`: Dust material composition to use in opacity calculations (default: "E40R")
+- `--dust_size`: Characteristic dust grain size in microns (default: 0.3)
+
+#### Dust Composition
+The following dust compositions are available through their prefix identifiers:
+
+- **x series (magnesium silicates):**
+  - `x035`: (0.65)MgO-(0.35)SiO2, density: 2.7 g/cm³
+  - `x040`: (0.60)MgO-(0.40)SiO2, density: 2.7 g/cm³
+  - `x050A`: (0.50)MgO-(0.50)SiO2 structure A, density: 2.7 g/cm³
+  - `x050B`: (0.50)MgO-(0.50)SiO2 structure B, density: 2.7 g/cm³
+
+- **E series (iron-magnesium silicates):**
+  - `E10`: Mg(0.9)Fe(0.1)SiO3 with Fe³⁺, density: 2.8 g/cm³
+  - `E10R`: Mg(0.9)Fe(0.1)SiO3 with Fe²⁺, density: 2.8 g/cm³
+  - `E20`: Mg(0.8)Fe(0.2)SiO3 with Fe³⁺, density: 2.9 g/cm³
+  - `E20R`: Mg(0.8)Fe(0.2)SiO3 with Fe²⁺, density: 2.9 g/cm³
+  - `E30`: Mg(0.7)Fe(0.3)SiO3 with Fe³⁺, density: 3.0 g/cm³
+  - `E30R`: Mg(0.7)Fe(0.3)SiO3 with Fe²⁺, density: 3.0 g/cm³
+  - `E40`: Mg(0.6)Fe(0.4)SiO3 with Fe³⁺, density: 3.1 g/cm³
+  - `E40R`: Mg(0.6)Fe(0.4)SiO3 with Fe²⁺, density: 3.1 g/cm³
+
+The R suffix in the E series indicates the reduced form of iron (Fe²⁺ instead of Fe³⁺), which affects the optical properties of the dust.
 
 ### Calculation Control
 
@@ -389,3 +412,8 @@ The code provides several visualization options for multi-species models:
 - Fixed bugs related to path misconnections between input and output directories
 - Merged related input parameters for temperature calculations to improve usability
 - Streamlined temperature convergence thresholds for consistent behavior across calculation modes
+
+### v2.0.0 
+- Main change: coupling with Optool
+- Added support for custom dust properties through new `--dust_material` and `--dust_size` parameters
+- Using all the Demyk's silicates

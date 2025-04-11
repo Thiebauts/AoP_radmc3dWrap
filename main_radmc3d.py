@@ -44,6 +44,9 @@ from radmc3d_aux import (run_radmc3d, read_dust_temperature, check_convergence,
                         plot_initial_dust_density, read_amr_grid, 
                         redistribute_density_by_temperature, write_temp_dependent_density)
 
+# Add import to check if run_optool.py exists
+import importlib.util
+
 def backup_temperature_file(iteration):
     """
     Create a backup of the dust_temperature.dat file for the current iteration.
@@ -296,6 +299,8 @@ def parse_arguments():
     physics.add_argument('--temp_ranges', type=str, default="50,150,250", help='Temperature range boundaries for dust opacity selection (K)')
     physics.add_argument('--dust_file', default="dustkapscatmat_E40R_300K_a0.3.inp", help='Dust opacity file for single-species models')
     physics.add_argument('--scattering_mode_max', type=int, default=1, help='Maximum scattering mode (0=no scattering, 1=isotropic, 2=anisotropic)')
+    physics.add_argument('--dust_material', type=str, default="E40R", help='Dust material composition (default: E40R)')
+    physics.add_argument('--dust_size', type=float, default=0.3, help='Characteristic dust grain size in microns (default: 0.3)')
     
     # Other options
     parser.add_argument('--no_plots', action='store_true', help='Disable plotting')
@@ -333,6 +338,10 @@ def parse_arguments():
     parser.add_argument('--temperature_file', type=str, default='dust_temperature.dat', 
                       help='Path to existing dust temperature file (when using --use_existing_temperature)')
     
+    # Add option to force regeneration of dustopac.inp
+    parser.add_argument('--regenerate-dustopac', action='store_true', 
+                      help='Force regeneration of dustopac.inp to match specified dust_material and dust_size')
+    
     args = parser.parse_args()
     # Set temp_dependent to True by default (use --no_temp_dependent to disable)
     args.temp_dependent = not args.no_temp_dependent
@@ -362,6 +371,89 @@ def main():
     
     # Store the original directory (where the script is being run from)
     original_dir = os.path.abspath(os.getcwd())
+    
+    # Check if dust opacity files need to be generated
+    if args.temp_dependent and not args.sed_only and not args.plot_only and not args.use_existing_temperature:
+        # Define the required dust opacity files
+        required_files = [
+            f'dustkapscatmat_{args.dust_material}_10K_a{args.dust_size}.inp',
+            f'dustkapscatmat_{args.dust_material}_100K_a{args.dust_size}.inp',
+            f'dustkapscatmat_{args.dust_material}_200K_a{args.dust_size}.inp',
+            f'dustkapscatmat_{args.dust_material}_300K_a{args.dust_size}.inp'
+        ]
+        
+        # Create output directory if it doesn't exist
+        if not os.path.exists(args.output_dir):
+            os.makedirs(args.output_dir)
+            print(f"Created output directory: {args.output_dir}")
+            
+        # Check if nk_optool directory exists in original directory or output_dir
+        original_nk_dir = "nk_optool"
+        output_nk_dir = os.path.join(args.output_dir, "nk_optool")
+        
+        # If nk_optool doesn't exist in output_dir but exists in original directory, copy it
+        if not os.path.exists(output_nk_dir) and os.path.exists(original_nk_dir):
+            print(f"Copying nk_optool directory to {args.output_dir}")
+            shutil.copytree(original_nk_dir, output_nk_dir)
+        
+        # Check if all required files exist in the output_dir
+        missing_files = []
+        for file in required_files:
+            output_file_path = os.path.join(args.output_dir, file)
+            if not os.path.exists(output_file_path):
+                missing_files.append(file)
+        
+        # If any files are missing, check if run_optool.py exists and run it
+        if missing_files:
+            print(f"\n=== Dust opacity files missing for {args.dust_material} with size {args.dust_size}μm ===")
+            print("Will try to generate them using run_optool.py...")
+            
+            # Check if run_optool.py exists in the current directory
+            if os.path.exists('run_optool.py'):
+                try:
+                    # Run the optool script to generate dust opacity files
+                    cmd = [
+                        sys.executable, 'run_optool.py', 
+                        '--material', args.dust_material,
+                        '--grain-size', str(args.dust_size),
+                        '--temperatures', '10,100,200,300',
+                        '--output-dir', args.output_dir
+                    ]
+                    
+                    # If nk_optool directory exists in output_dir, add it as a parameter
+                    if os.path.exists(output_nk_dir):
+                        cmd.extend(['--nk-dir', output_nk_dir])
+                    
+                    print(f"Running: {' '.join(cmd)}")
+                    subprocess.run(cmd, check=True)
+                    print("Successfully generated dust opacity files.")
+                    
+                    # Verify the files were created in the output directory
+                    still_missing = []
+                    for file in missing_files:
+                        output_file_path = os.path.join(args.output_dir, file)
+                        if not os.path.exists(output_file_path):
+                            still_missing.append(file)
+                    
+                    if still_missing:
+                        print(f"Warning: The following files are still missing after running run_optool.py:")
+                        for file in still_missing:
+                            print(f"  - {file}")
+                        print("Will attempt to continue with available files.")
+                    else:
+                        print("All required dust opacity files were successfully created.")
+                except Exception as e:
+                    print(f"Error running run_optool.py: {e}")
+                    print("ERROR: Could not generate required dust opacity files.")
+                    print(f"Make sure all files exist in the output directory ({args.output_dir}):")
+                    print(f"- dustkapscatmat_{args.dust_material}_10K_a{args.dust_size}.inp")
+                    print(f"- dustkapscatmat_{args.dust_material}_100K_a{args.dust_size}.inp")
+                    print(f"- dustkapscatmat_{args.dust_material}_200K_a{args.dust_size}.inp")
+                    print(f"- dustkapscatmat_{args.dust_material}_300K_a{args.dust_size}.inp")
+                    return 1
+            else:
+                print("Warning: run_optool.py script not found in the current directory.")
+                print("Please make sure it exists or generate the dust opacity files manually.")
     
     # Convert input_dir to absolute path if provided
     if args.input_dir is not None:
@@ -406,6 +498,124 @@ def main():
                            read_amr_grid, read_dust_density, plot_advanced_temperature_density, 
                            plot_initial_dust_density, plot_temperature_dependent_summary,
                            redistribute_density_by_temperature, write_temp_dependent_density)
+    
+    # Handle the --regenerate-dustopac flag if specified
+    if args.regenerate_dustopac:
+        print("\n=== Regenerating dustopac.inp file with specified material and size ===")
+        
+        # Import functions needed for dustopac regeneration
+        from create_input import create_dustopac, verify_dust_opacity_files, copy_dust_opacity
+        
+        # Check for the required dust opacity files
+        if args.temp_dependent:
+            # Temperature-dependent case
+            files_exist, missing_files = verify_dust_opacity_files(
+                dust_material=args.dust_material,
+                dust_size=args.dust_size,
+                temp_dependent=True
+            )
+            
+            if not files_exist:
+                print(f"WARNING: Missing dust opacity files for material {args.dust_material} with size {args.dust_size}μm")
+                print("Missing files:")
+                for file in missing_files:
+                    print(f"  - {file}")
+                print("\nAttempting to generate missing files with run_optool.py...")
+                
+                if os.path.exists('run_optool.py') or os.path.exists(os.path.join(original_dir, 'run_optool.py')):
+                    try:
+                        # Use either local run_optool.py or the one in the original directory
+                        optool_script = 'run_optool.py' if os.path.exists('run_optool.py') else os.path.join(original_dir, 'run_optool.py')
+                        
+                        cmd = [
+                            sys.executable, optool_script,
+                            '--material', args.dust_material,
+                            '--grain-size', str(args.dust_size),
+                            '--temperatures', '10,100,200,300',
+                            '--output-dir', '.'
+                        ]
+                        print(f"Running: {' '.join(cmd)}")
+                        subprocess.run(cmd, check=True)
+                        
+                        # Check if files were created
+                        files_exist, still_missing = verify_dust_opacity_files(
+                            dust_material=args.dust_material,
+                            dust_size=args.dust_size,
+                            temp_dependent=True
+                        )
+                        
+                        if not files_exist:
+                            print(f"WARNING: Still missing some files after running run_optool.py:")
+                            for file in still_missing:
+                                print(f"  - {file}")
+                            print("Will continue with available files.")
+                        else:
+                            print("Successfully generated all required dust opacity files.")
+                    except Exception as e:
+                        print(f"Error running run_optool.py: {e}")
+                        print("Will continue with available files.")
+                else:
+                    print("run_optool.py not found. Cannot generate missing files.")
+                    print("Will continue with available files.")
+            
+            # Create the temperature-dependent dustopac.inp file
+            create_dustopac(temp_dependent=True, dust_material=args.dust_material, dust_size=args.dust_size)
+            print(f"Created dustopac.inp with temperature-dependent opacities for material {args.dust_material} with size {args.dust_size}μm")
+            
+        else:
+            # Single-species case
+            main_file = f'dustkapscatmat_{args.dust_material}_300K_a{args.dust_size}.inp'
+            
+            # Check if the main opacity file exists
+            if not os.path.exists(main_file):
+                print(f"WARNING: Missing dust opacity file: {main_file}")
+                print("\nAttempting to generate it with run_optool.py...")
+                
+                if os.path.exists('run_optool.py') or os.path.exists(os.path.join(original_dir, 'run_optool.py')):
+                    try:
+                        # Use either local run_optool.py or the one in the original directory
+                        optool_script = 'run_optool.py' if os.path.exists('run_optool.py') else os.path.join(original_dir, 'run_optool.py')
+                        
+                        cmd = [
+                            sys.executable, optool_script,
+                            '--material', args.dust_material,
+                            '--grain-size', str(args.dust_size),
+                            '--no-temp-dependent',
+                            '--output-dir', '.'
+                        ]
+                        print(f"Running: {' '.join(cmd)}")
+                        subprocess.run(cmd, check=True)
+                        
+                        if os.path.exists(main_file):
+                            print(f"Successfully generated {main_file}")
+                        else:
+                            print(f"WARNING: Could not generate {main_file}")
+                            print("Will continue with available files.")
+                    except Exception as e:
+                        print(f"Error running run_optool.py: {e}")
+                        print("Will continue with available files.")
+                else:
+                    print("run_optool.py not found. Cannot generate missing files.")
+                    print("Will continue with available files.")
+            
+            # If the main file exists, create the standard dust_kapscatmat file and dustopac.inp
+            if os.path.exists(main_file):
+                copy_dust_opacity(dust_file=main_file, new_name='dust_kapscatmat_1.inp')
+                create_dustopac(nspecies=1, scattering_mode=args.scattering_mode_max, 
+                              water_fountain=False, dust_material=args.dust_material, dust_size=args.dust_size)
+                print(f"Created dustopac.inp with single-species opacity for material {args.dust_material} with size {args.dust_size}μm")
+            else:
+                print(f"WARNING: Required dust opacity file {main_file} not found.")
+                print("Cannot create proper dustopac.inp without the required file.")
+        
+        if args.sed_only:
+            print("Continuing with SED calculation using the regenerated dustopac.inp file...")
+        elif args.plot_only:
+            print("Continuing with plot generation...")
+        elif args.use_existing_temperature:
+            print("Continuing with existing temperature file and regenerated dustopac.inp file...")
+        else:
+            print("Continuing with regular temperature calculation...")
     
     # Special message for plot-only mode
     if args.plot_only:
@@ -504,7 +714,7 @@ def main():
                         print("Minimum density: {:.2e} g/cm³".format(density_stats['min_density']))
                         print("Maximum density: {:.2e} g/cm³".format(density_stats['max_density']))
                         print("Mean density: {:.2e} g/cm³".format(density_stats['mean_density']))
-                        print("Median density: {:.2e} g/cm³".format(density_stats['median_density']))
+                        print(f"Median density: {density_stats['median_density']:.2e} g/cm³")
                 except Exception as e:
                     print("Error creating density plot: {}".format(e))
             
@@ -559,7 +769,7 @@ def main():
                 print("Minimum temperature: {:.2f} K".format(stats['min_temperature']))
                 print("Maximum temperature: {:.2f} K".format(stats['max_temperature']))
                 print("Mean temperature: {:.2f} K".format(stats['mean_temperature']))
-                print("Median temperature: {:.2f} K".format(stats['median_temperature']))
+                print(f"Median temperature: {stats['median_temperature']:.2f} K")
                 
                 # Print cells in different temperature ranges
                 total_cells = stats['total_cells']
@@ -600,7 +810,7 @@ def main():
                     shutil.copy('dust_temperature.dat', os.path.join(os.path.abspath(output_dir), 'dust_temperature.dat'))
                     
                     # Copy other required files too
-                    for req_file in ['amr_grid.inp', 'wavelength_micron.inp', 'dustopac.inp', 
+                    for req_file in ['amr_grid.inp', 'wavelength_micron.inp', 
                                     'dust_density.inp', 'stars.inp', 'radmc3d.inp']:
                         if os.path.exists(req_file):
                             shutil.copy(req_file, os.path.join(os.path.abspath(output_dir), req_file))
@@ -619,6 +829,153 @@ def main():
             print("Make sure it exists in: {}".format(os.path.abspath('.')))
             print("Alternatively, specify a temperature file with --temperature_file.")
             return 1
+        
+        # Check the number of dust species in the dust_temperature.dat file
+        n_species_in_temp_file = 1  # Default assumption
+        try:
+            with open('dust_temperature.dat', 'r') as f:
+                # Read format (should be 1)
+                iformat = int(f.readline().strip())
+                # Read number of cells
+                ncells = int(f.readline().strip())
+                # Read number of species
+                n_species_in_temp_file = int(f.readline().strip())
+            
+            print(f"\nDetected {n_species_in_temp_file} dust species in the temperature file.")
+        except Exception as e:
+            print(f"Warning: Could not read number of species from dust_temperature.dat: {e}")
+            print("Assuming 1 dust species in temperature file.")
+        
+        # Create or update dustopac.inp file with the specified dust material and size
+        # Use the same number of species as in the dust_temperature.dat file
+        from create_input import create_dustopac, copy_dust_opacity
+        
+        # Check if the required dustkapscatmat files exist for the specified material and size
+        required_files = []
+        if args.temp_dependent and n_species_in_temp_file >= 4:
+            # For temperature-dependent mode with 4 species
+            required_files = [
+                f'dustkapscatmat_{args.dust_material}_10K_a{args.dust_size}.inp',
+                f'dustkapscatmat_{args.dust_material}_100K_a{args.dust_size}.inp',
+                f'dustkapscatmat_{args.dust_material}_200K_a{args.dust_size}.inp',
+                f'dustkapscatmat_{args.dust_material}_300K_a{args.dust_size}.inp'
+            ]
+            print(f"Using temperature-dependent dust opacities for material {args.dust_material} with size {args.dust_size}μm")
+        else:
+            # For single-species mode (or if temperature file has fewer than 4 species)
+            temp_dependent = False
+            required_files = [f'dustkapscatmat_{args.dust_material}_300K_a{args.dust_size}.inp']
+            print(f"Using single dust opacity file for material {args.dust_material} with size {args.dust_size}μm")
+            
+            # If temperature-dependent was requested but not possible
+            if args.temp_dependent and n_species_in_temp_file < 4:
+                print(f"\nWARNING: Temperature-dependent opacity requested but dust_temperature.dat has only {n_species_in_temp_file} species.")
+                print("Falling back to single-species mode for SED calculation.")
+        
+        # Check for missing dust opacity files
+        missing_files = []
+        for file in required_files:
+            if not os.path.exists(file):
+                missing_files.append(file)
+        
+        if missing_files:
+            print("\nWARNING: The following dust opacity files are missing:")
+            for file in missing_files:
+                print(f"  - {file}")
+            print("\nAttempting to find or generate these files...")
+            
+            # Try to copy from other locations or generate with run_optool.py
+            if os.path.exists('run_optool.py'):
+                try:
+                    # Run optool to generate the required dust opacity files
+                    temperatures_arg = '10,100,200,300' if args.temp_dependent and n_species_in_temp_file >= 4 else '300'
+                    no_temp_dependent_arg = [] if args.temp_dependent and n_species_in_temp_file >= 4 else ['--no-temp-dependent']
+                    
+                    cmd = [
+                        sys.executable, 'run_optool.py', 
+                        '--material', args.dust_material,
+                        '--grain-size', str(args.dust_size),
+                        '--temperatures', temperatures_arg,
+                        '--output-dir', '.'
+                    ]
+                    if no_temp_dependent_arg:
+                        cmd.extend(no_temp_dependent_arg)
+                    
+                    print(f"Running: {' '.join(cmd)}")
+                    subprocess.run(cmd, check=True)
+                    
+                    # Check if files were created
+                    still_missing = []
+                    for file in missing_files:
+                        if not os.path.exists(file):
+                            still_missing.append(file)
+                    
+                    if still_missing:
+                        print("\nWARNING: The following files are still missing:")
+                        for file in still_missing:
+                            print(f"  - {file}")
+                        print("SED calculation may fail!")
+                    else:
+                        print("Successfully generated all required dust opacity files.")
+                except Exception as e:
+                    print(f"Error generating dust opacity files: {e}")
+                    print("SED calculation may fail!")
+            else:
+                print("run_optool.py not found. Cannot generate missing files.")
+                print("SED calculation may fail!")
+        
+        # Create dustopac.inp with the correct number of species
+        if args.temp_dependent and n_species_in_temp_file >= 4:
+            create_dustopac(temp_dependent=True, dust_material=args.dust_material, dust_size=args.dust_size)
+            print(f"Created dustopac.inp with temperature-dependent dust species, scattering mode {args.scattering_mode_max}")
+        else:
+            # For a single-species mode (or if temperature file has < 4 species)
+            # First, make sure we have the dust opacity file in the correct format
+            main_opacity_file = f'dustkapscatmat_{args.dust_material}_300K_a{args.dust_size}.inp'
+            
+            if os.path.exists(main_opacity_file):
+                # Copy with the standard name if needed
+                if n_species_in_temp_file == 1:
+                    copy_dust_opacity(dust_file=main_opacity_file, new_name='dust_kapscatmat_1.inp')
+                    # Create dustopac.inp for a single species
+                    create_dustopac(nspecies=1, scattering_mode=args.scattering_mode_max, 
+                                   water_fountain=False, dust_material=args.dust_material, dust_size=args.dust_size)
+                    print(f"Created dustopac.inp with single dust species, scattering mode {args.scattering_mode_max}")
+                else:
+                    # Handle multiple species but not temperature-dependent case
+                    for i in range(n_species_in_temp_file):
+                        copy_dust_opacity(dust_file=main_opacity_file, new_name=f'dust_kapscatmat_{i+1}.inp')
+                    
+                    # Create dustopac with the exact number of species from temperature file
+                    create_dustopac(nspecies=n_species_in_temp_file, scattering_mode=args.scattering_mode_max, 
+                                   water_fountain=False, dust_material=args.dust_material, dust_size=args.dust_size)
+                    print(f"Created dustopac.inp with {n_species_in_temp_file} identical dust species, scattering mode {args.scattering_mode_max}")
+            else:
+                print(f"WARNING: Required dust opacity file {main_opacity_file} not found.")
+                print("SED calculation may fail!")
+        
+        # Display the content of dustopac.inp
+        if os.path.exists('dustopac.inp'):
+            print("\nCreated dustopac.inp with the following content:")
+            with open('dustopac.inp', 'r') as f:
+                print(f.read())
+                
+        # Display which dust opacity files are being used
+        if os.path.exists('dustopac.inp'):
+            print("\nUsing dust opacity files for:")
+            if args.temp_dependent and n_species_in_temp_file >= 4:
+                print(f"  - Material: {args.dust_material}")
+                print(f"  - Grain size: {args.dust_size}μm")
+                print(f"  - Temperature ranges: <50K, 50-150K, 150-250K, >250K")
+                print(f"  - Files: dustkapscatmat_{args.dust_material}_[10K,100K,200K,300K]_a{args.dust_size}.inp")
+            else:
+                print(f"  - Material: {args.dust_material}")
+                print(f"  - Grain size: {args.dust_size}μm")
+                print(f"  - Number of species in temperature file: {n_species_in_temp_file}")
+                if n_species_in_temp_file == 1:
+                    print(f"  - File: dustkapscatmat_{args.dust_material}_300K_a{args.dust_size}.inp (copied to dust_kapscatmat_1.inp)")
+                else:
+                    print(f"  - File: dustkapscatmat_{args.dust_material}_300K_a{args.dust_size}.inp (copied to dust_kapscatmat_1.inp through dust_kapscatmat_{n_species_in_temp_file}.inp)")
     
     # Check if we should use existing temperature file
     using_existing_temp_file = False
@@ -627,11 +984,201 @@ def main():
         if verify_dust_temperature_file(args.temperature_file):
             print("\n=== Using existing temperature file: {} ===".format(args.temperature_file))
             
+            # Save current directory to return to it later if needed
+            current_dir = os.getcwd()
+            
+            # Check the number of dust species in the temperature file
+            n_species_in_temp_file = 1  # Default assumption
+            try:
+                with open(args.temperature_file, 'r') as f:
+                    # Read format (should be 1)
+                    iformat = int(f.readline().strip())
+                    # Read number of cells
+                    ncells = int(f.readline().strip())
+                    # Read number of species
+                    n_species_in_temp_file = int(f.readline().strip())
+                
+                print(f"Detected {n_species_in_temp_file} dust species in the temperature file.")
+            except Exception as e:
+                print(f"Warning: Could not read number of species from {args.temperature_file}: {e}")
+                print("Assuming 1 dust species in temperature file.")
+            
             # If temperature file is in a different location, copy it to the current directory
             if args.temperature_file != 'dust_temperature.dat' and os.path.exists(args.temperature_file):
                 if not os.path.samefile(args.temperature_file, 'dust_temperature.dat'):
                     shutil.copy(args.temperature_file, 'dust_temperature.dat')
                     print(f"Copied {args.temperature_file} to {output_dir}/dust_temperature.dat")
+            
+            # Ensure we have the proper dust opacity files for the specified material and size
+            from create_input import verify_dust_opacity_files, create_dustopac, copy_dust_opacity
+            
+            # Check if required dust opacity files exist
+            if args.temp_dependent and n_species_in_temp_file >= 4:
+                # Check for temperature-dependent files
+                files_exist, missing_files = verify_dust_opacity_files(
+                    dust_material=args.dust_material,
+                    dust_size=args.dust_size,
+                    temp_dependent=True
+                )
+                
+                if not files_exist:
+                    print(f"\nWARNING: Missing temperature-dependent dust opacity files for {args.dust_material} with size {args.dust_size}μm")
+                    print("Will attempt to generate them using run_optool.py...")
+                    
+                    # Try to generate missing files
+                    if os.path.exists('run_optool.py'):
+                        try:
+                            cmd = [
+                                sys.executable, 'run_optool.py',
+                                '--material', args.dust_material,
+                                '--grain-size', str(args.dust_size),
+                                '--temperatures', '10,100,200,300',
+                                '--output-dir', '.'
+                            ]
+                            print(f"Running: {' '.join(cmd)}")
+                            subprocess.run(cmd, check=True)
+                            
+                            # Check again if files were created
+                            files_exist, still_missing = verify_dust_opacity_files(
+                                dust_material=args.dust_material,
+                                dust_size=args.dust_size,
+                                temp_dependent=True
+                            )
+                            
+                            if not files_exist:
+                                print("\nWARNING: Could not generate all required dust opacity files.")
+                                print("This may affect your results!")
+                            else:
+                                print("Successfully generated all required dust opacity files.")
+                        except Exception as e:
+                            print(f"Error running run_optool.py: {e}")
+                            print("WARNING: This may affect your results!")
+                    else:
+                        print("run_optool.py not found. Cannot generate missing files.")
+                        print("WARNING: This may affect your results!")
+                
+                # Create temperature-dependent dustopac.inp
+                create_dustopac(temp_dependent=True, dust_material=args.dust_material, dust_size=args.dust_size)
+                print(f"Created temperature-dependent dustopac.inp for {args.dust_material} with size {args.dust_size}μm")
+            else:
+                # Check for single dust opacity file
+                main_opacity_file = f'dustkapscatmat_{args.dust_material}_300K_a{args.dust_size}.inp'
+                
+                if not os.path.exists(main_opacity_file):
+                    print(f"\nWARNING: Missing dust opacity file {main_opacity_file}")
+                    print("Will attempt to generate it using run_optool.py...")
+                    
+                    # Try to generate missing file
+                    if os.path.exists('run_optool.py'):
+                        try:
+                            cmd = [
+                                sys.executable, 'run_optool.py',
+                                '--material', args.dust_material,
+                                '--grain-size', str(args.dust_size),
+                                '--no-temp-dependent',
+                                '--output-dir', '.'
+                            ]
+                            print(f"Running: {' '.join(cmd)}")
+                            subprocess.run(cmd, check=True)
+                            
+                            if os.path.exists(main_opacity_file):
+                                print(f"Successfully generated {main_opacity_file}")
+                            else:
+                                print(f"WARNING: Could not generate {main_opacity_file}")
+                                print("This may affect your results!")
+                        except Exception as e:
+                            print(f"Error running run_optool.py: {e}")
+                            print("WARNING: This may affect your results!")
+                    else:
+                        print("run_optool.py not found. Cannot generate missing files.")
+                        print("WARNING: This may affect your results!")
+                
+                # Create appropriate dustopac.inp for the number of species in temperature file
+                if os.path.exists(main_opacity_file):
+                    if n_species_in_temp_file == 1:
+                        # Single species
+                        copy_dust_opacity(dust_file=main_opacity_file, new_name='dust_kapscatmat_1.inp')
+                        create_dustopac(nspecies=1, scattering_mode=args.scattering_mode_max, 
+                                      water_fountain=False, dust_material=args.dust_material, dust_size=args.dust_size)
+                        print(f"Created single-species dustopac.inp for {args.dust_material} with size {args.dust_size}μm")
+                    else:
+                        # Multiple species - copy the same opacity file for all species
+                        for i in range(n_species_in_temp_file):
+                            copy_dust_opacity(dust_file=main_opacity_file, new_name=f'dust_kapscatmat_{i+1}.inp')
+                        
+                        create_dustopac(nspecies=n_species_in_temp_file, scattering_mode=args.scattering_mode_max, 
+                                      water_fountain=False, dust_material=args.dust_material, dust_size=args.dust_size)
+                        print(f"Created {n_species_in_temp_file}-species dustopac.inp for {args.dust_material} with size {args.dust_size}μm")
+                else:
+                    print(f"WARNING: Required dust opacity file {main_opacity_file} not found.")
+                    print("WARNING: This may affect your results!")
+            
+            # If output directory is different from current directory, fix dustopac.inp there too
+            if os.path.exists(args.output_dir) and os.path.abspath(args.output_dir) != os.path.abspath('.'):
+                # Copy dustopac.inp to output directory
+                if os.path.exists('dustopac.inp'):
+                    shutil.copy('dustopac.inp', os.path.join(args.output_dir, 'dustopac.inp'))
+                    print(f"Copied dustopac.inp to {args.output_dir}")
+                
+                # Also create proper dustopac.inp directly in the output directory
+                print(f"\nEnsuring correct dustopac.inp in output directory {args.output_dir}...")
+                
+                # Temporarily change to output directory
+                os.chdir(args.output_dir)
+                
+                try:
+                    # Try to create dustopac.inp with correct settings in output directory
+                    if args.temp_dependent and n_species_in_temp_file >= 4:
+                        # Check if all required files exist in output directory
+                        if all(os.path.exists(f'dustkapscatmat_{args.dust_material}_{temp}K_a{args.dust_size}.inp') 
+                              for temp in ['10', '100', '200', '300']):
+                            create_dustopac(temp_dependent=True, dust_material=args.dust_material, dust_size=args.dust_size)
+                            print(f"Created proper temperature-dependent dustopac.inp in {args.output_dir}")
+                        else:
+                            # Copy required files from current directory
+                            for temp in ['10', '100', '200', '300']:
+                                src_file = os.path.join(current_dir, f'dustkapscatmat_{args.dust_material}_{temp}K_a{args.dust_size}.inp')
+                                if os.path.exists(src_file):
+                                    shutil.copy(src_file, f'dustkapscatmat_{args.dust_material}_{temp}K_a{args.dust_size}.inp')
+                            
+                            # Try again to create dustopac.inp
+                            if all(os.path.exists(f'dustkapscatmat_{args.dust_material}_{temp}K_a{args.dust_size}.inp') 
+                                 for temp in ['10', '100', '200', '300']):
+                                create_dustopac(temp_dependent=True, dust_material=args.dust_material, dust_size=args.dust_size)
+                                print(f"Created proper temperature-dependent dustopac.inp in {args.output_dir}")
+                            else:
+                                print(f"WARNING: Could not create proper dustopac.inp in {args.output_dir} due to missing files")
+                    else:
+                        # Single or multi-species case
+                        main_file = f'dustkapscatmat_{args.dust_material}_300K_a{args.dust_size}.inp'
+                        if os.path.exists(main_file):
+                            # Copy to standard names and create dustopac.inp
+                            for i in range(n_species_in_temp_file):
+                                copy_dust_opacity(dust_file=main_file, new_name=f'dust_kapscatmat_{i+1}.inp')
+                            
+                            create_dustopac(nspecies=n_species_in_temp_file, scattering_mode=args.scattering_mode_max,
+                                          water_fountain=False, dust_material=args.dust_material, dust_size=args.dust_size)
+                            print(f"Created proper {n_species_in_temp_file}-species dustopac.inp in {args.output_dir}")
+                        else:
+                            # Try to copy from current directory
+                            src_file = os.path.join(current_dir, main_file)
+                            if os.path.exists(src_file):
+                                shutil.copy(src_file, main_file)
+                                
+                                # Now create the standard copies and dustopac.inp
+                                for i in range(n_species_in_temp_file):
+                                    copy_dust_opacity(dust_file=main_file, new_name=f'dust_kapscatmat_{i+1}.inp')
+                                
+                                create_dustopac(nspecies=n_species_in_temp_file, scattering_mode=args.scattering_mode_max,
+                                              water_fountain=False, dust_material=args.dust_material, dust_size=args.dust_size)
+                                print(f"Created proper {n_species_in_temp_file}-species dustopac.inp in {args.output_dir}")
+                            else:
+                                print(f"WARNING: Could not create proper dustopac.inp in {args.output_dir} due to missing files")
+                except Exception as e:
+                    print(f"Error creating dustopac.inp in output directory: {e}")
+                
+                # Return to original directory
+                os.chdir(current_dir)
             
             # Set flag to skip temperature calculation
             using_existing_temp_file = True
@@ -660,24 +1207,94 @@ def main():
         if args.temp_dependent:
             from create_input import copy_temp_dependent_dust_opacities
             
-            # First try to use files from the current directory
-            if not copy_temp_dependent_dust_opacities("."):
-                print("Trying to find dust opacity files in original directory...")
-                if not copy_temp_dependent_dust_opacities(os.path.dirname(os.path.abspath(__file__))):
-                    print("Trying to find dust opacity files in parent of original directory...")
-                    # Try the parent of the original directory
-                    parent_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-                    if not copy_temp_dependent_dust_opacities(parent_dir):
-                        print("ERROR: Could not find all required temperature-dependent dust opacity files.")
-                        print("Make sure all files exist in either the original or parent directory:")
-                        print("- dustkapscatmat_E40R_10K_a0.3.inp")
-                        print("- dustkapscatmat_E40R_100K_a0.3.inp")
-                        print("- dustkapscatmat_E40R_200K_a0.3.inp")
-                        print("- dustkapscatmat_E40R_300K_a0.3.inp")
-                        return 1
+            # First try to use files from the output_dir
+            if not copy_temp_dependent_dust_opacities(args.output_dir, dust_material=args.dust_material, dust_size=args.dust_size):
+                # Then try current directory
+                print("Trying to find dust opacity files in current directory...")
+                if not copy_temp_dependent_dust_opacities(".", dust_material=args.dust_material, dust_size=args.dust_size):
+                    print("Trying to find dust opacity files in original directory...")
+                    if not copy_temp_dependent_dust_opacities(os.path.dirname(os.path.abspath(__file__)), 
+                                                             dust_material=args.dust_material, dust_size=args.dust_size):
+                        print("Trying to find dust opacity files in parent of original directory...")
+                        # Try the parent of the original directory
+                        parent_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+                        if not copy_temp_dependent_dust_opacities(parent_dir, 
+                                                                dust_material=args.dust_material, dust_size=args.dust_size):
+                            # Try generating the dust opacity files using run_optool.py
+                            print("\nCould not find all required temperature-dependent dust opacity files.")
+                            print(f"Attempting to generate them using run_optool.py for material {args.dust_material} and size {args.dust_size}μm...")
+                            
+                            # Check if run_optool.py exists in the original directory
+                            run_optool_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run_optool.py")
+                            if not os.path.exists(run_optool_path):
+                                run_optool_path = os.path.join(parent_dir, "run_optool.py")
+                            
+                            # Check if nk_optool directory exists in current directory
+                            current_nk_dir = os.path.join(os.getcwd(), "nk_optool")
+                            
+                            if os.path.exists(run_optool_path) or os.path.exists("run_optool.py"):
+                                try:
+                                    # Use local or found run_optool.py
+                                    optool_script = "run_optool.py" if os.path.exists("run_optool.py") else run_optool_path
+                                    
+                                    # Build command
+                                    cmd = [
+                                        sys.executable, optool_script, 
+                                        '--material', args.dust_material,
+                                        '--grain-size', str(args.dust_size),
+                                        '--temperatures', '10,100,200,300',
+                                        '--output-dir', args.output_dir
+                                    ]
+                                    
+                                    # Add nk_dir if it exists
+                                    if os.path.exists(current_nk_dir):
+                                        cmd.extend(['--nk-dir', current_nk_dir])
+                                    elif os.path.exists("nk_optool"):
+                                        cmd.extend(['--nk-dir', 'nk_optool'])
+                                    
+                                    print(f"Running: {' '.join(cmd)}")
+                                    subprocess.run(cmd, check=True)
+                                    
+                                    # Try copying the files again after generation
+                                    if copy_temp_dependent_dust_opacities(args.output_dir, dust_material=args.dust_material, dust_size=args.dust_size):
+                                        print("Successfully generated and found all required dust opacity files.")
+                                    else:
+                                        print("ERROR: Still missing some required dust opacity files after generation attempt.")
+                                        print(f"Make sure all files exist in the output directory ({args.output_dir}):")
+                                        print(f"- dustkapscatmat_{args.dust_material}_10K_a{args.dust_size}.inp")
+                                        print(f"- dustkapscatmat_{args.dust_material}_100K_a{args.dust_size}.inp")
+                                        print(f"- dustkapscatmat_{args.dust_material}_200K_a{args.dust_size}.inp")
+                                        print(f"- dustkapscatmat_{args.dust_material}_300K_a{args.dust_size}.inp")
+                                        return 1
+                                except Exception as e:
+                                    print(f"Error running run_optool.py: {e}")
+                                    print("ERROR: Could not generate required dust opacity files.")
+                                    print(f"Make sure all files exist in the output directory ({args.output_dir}):")
+                                    print(f"- dustkapscatmat_{args.dust_material}_10K_a{args.dust_size}.inp")
+                                    print(f"- dustkapscatmat_{args.dust_material}_100K_a{args.dust_size}.inp")
+                                    print(f"- dustkapscatmat_{args.dust_material}_200K_a{args.dust_size}.inp")
+                                    print(f"- dustkapscatmat_{args.dust_material}_300K_a{args.dust_size}.inp")
+                                    return 1
+                            else:
+                                print("ERROR: Could not find all required temperature-dependent dust opacity files.")
+                                print("ERROR: run_optool.py script not found to generate the files.")
+                                print(f"Make sure all files exist in the output directory ({args.output_dir}):")
+                                print(f"- dustkapscatmat_{args.dust_material}_10K_a{args.dust_size}.inp")
+                                print(f"- dustkapscatmat_{args.dust_material}_100K_a{args.dust_size}.inp")
+                                print(f"- dustkapscatmat_{args.dust_material}_200K_a{args.dust_size}.inp")
+                                print(f"- dustkapscatmat_{args.dust_material}_300K_a{args.dust_size}.inp")
+                                return 1
         else:
-            # Check if the dust opacity file exists in current directory first
-            if os.path.exists(args.dust_file):
+            # Check if the dust opacity file exists in output directory first
+            output_dust_file = os.path.join(args.output_dir, args.dust_file)
+            if os.path.exists(output_dust_file):
+                print(f"Using existing {args.dust_file} from output directory")
+                # Copy to current directory if needed
+                if not os.path.exists(args.dust_file) or not os.path.samefile(output_dust_file, args.dust_file):
+                    shutil.copy(output_dust_file, ".")
+                    print(f"Copied {args.dust_file} from output directory to current directory")
+            # Otherwise, check if the dust opacity file exists in current directory
+            elif os.path.exists(args.dust_file):
                 print(f"Using existing {args.dust_file} from current directory")
             # Otherwise, try to copy from original directory
             else:
@@ -685,17 +1302,116 @@ def main():
                 
                 if os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), args.dust_file)):
                     shutil.copy(os.path.join(os.path.dirname(os.path.abspath(__file__)), args.dust_file), ".")
-                    print(f"Copied {args.dust_file} from original directory to {output_dir}")
+                    print(f"Copied {args.dust_file} from original directory to current directory")
                 # Otherwise, try to copy from parent directory
                 elif os.path.exists(os.path.join(parent_dir, args.dust_file)):
                     shutil.copy(os.path.join(parent_dir, args.dust_file), ".")
-                    print(f"Copied {args.dust_file} from parent directory to {output_dir}")
+                    print(f"Copied {args.dust_file} from parent directory to current directory")
                 else:
-                    print(f"Warning: Dust file {args.dust_file} not found in current, original or parent directory")
-                    print("Current directory:", os.getcwd())
+                    print(f"Dust file {args.dust_file} not found in output, current, original or parent directory.")
+                    print(f"Attempting to generate it using run_optool.py...")
+                    
+                    # Extract dust material and size from the dust_file name if not in standard format
+                    try:
+                        # Try to parse dust_material and dust_size from filename if possible
+                        if args.dust_file.startswith('dustkapscatmat_') and args.dust_file.endswith('.inp'):
+                            # Extract from filename like dustkapscatmat_E40R_300K_a0.3.inp
+                            parts = args.dust_file.replace('.inp', '').split('_')
+                            if len(parts) >= 4:
+                                material = parts[1]
+                                temp = parts[2].replace('K', '')
+                                size = parts[3].replace('a', '')
+                                
+                                # Check if run_optool.py exists
+                                run_optool_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run_optool.py")
+                                if not os.path.exists(run_optool_path):
+                                    run_optool_path = os.path.join(parent_dir, "run_optool.py")
+                                
+                                if os.path.exists("run_optool.py") or os.path.exists(run_optool_path):
+                                    # Use local or found run_optool.py
+                                    optool_script = "run_optool.py" if os.path.exists("run_optool.py") else run_optool_path
+                                    
+                                    # Run the optool script to generate the single dust opacity file
+                                    cmd = [
+                                        sys.executable, optool_script, 
+                                        '--material', material,
+                                        '--grain-size', size,
+                                        '--no-temp-dependent',
+                                        '--output-dir', args.output_dir
+                                    ]
+                                    print(f"Running: {' '.join(cmd)}")
+                                    subprocess.run(cmd, check=True)
+                                    
+                                    # Check if the file was generated in the output directory
+                                    output_dust_file = os.path.join(args.output_dir, args.dust_file)
+                                    if os.path.exists(output_dust_file):
+                                        print(f"Successfully generated {args.dust_file}")
+                                        # Copy to current directory
+                                        shutil.copy(output_dust_file, ".")
+                                        print(f"Copied {args.dust_file} from output directory to current directory")
+                                    else:
+                                        # Try with temperature-dependent mode and specific temp
+                                        cmd = [
+                                            sys.executable, optool_script, 
+                                            '--material', material,
+                                            '--grain-size', size,
+                                            '--temperatures', temp,
+                                            '--output-dir', args.output_dir
+                                        ]
+                                        print(f"Trying alternative command: {' '.join(cmd)}")
+                                        subprocess.run(cmd, check=True)
+                                        
+                                        # Check again if file exists in output directory
+                                        output_dust_file = os.path.join(args.output_dir, args.dust_file)
+                                        if os.path.exists(output_dust_file):
+                                            print(f"Successfully generated {args.dust_file}")
+                                            # Copy to current directory
+                                            shutil.copy(output_dust_file, ".")
+                                            print(f"Copied {args.dust_file} from output directory to current directory")
+                                        else:
+                                            print(f"Warning: Could not generate {args.dust_file}")
+                                else:
+                                    print(f"Warning: run_optool.py not found, cannot generate {args.dust_file}")
+                            else:
+                                print(f"Warning: Could not parse dust material and size from {args.dust_file}")
+                        else:
+                            # Use the default dust_material and dust_size arguments
+                            run_optool_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run_optool.py")
+                            if not os.path.exists(run_optool_path):
+                                run_optool_path = os.path.join(parent_dir, "run_optool.py")
+                            
+                            if os.path.exists("run_optool.py") or os.path.exists(run_optool_path):
+                                # Use local or found run_optool.py
+                                optool_script = "run_optool.py" if os.path.exists("run_optool.py") else run_optool_path
+                                
+                                # Run the optool script with the default values
+                                cmd = [
+                                    sys.executable, optool_script, 
+                                    '--material', args.dust_material,
+                                    '--grain-size', str(args.dust_size),
+                                    '--no-temp-dependent',
+                                    '--output-dir', args.output_dir
+                                ]
+                                print(f"Running: {' '.join(cmd)}")
+                                subprocess.run(cmd, check=True)
+                                
+                                # Check if a suitable file was generated in the output directory
+                                output_dust_file = os.path.join(args.output_dir, args.dust_file)
+                                if os.path.exists(output_dust_file):
+                                    print(f"Successfully generated {args.dust_file}")
+                                    # Copy to current directory
+                                    shutil.copy(output_dust_file, ".")
+                                    print(f"Copied {args.dust_file} from output directory to current directory")
+                                else:
+                                    print(f"Warning: Could not generate {args.dust_file}")
+                            else:
+                                print(f"Warning: run_optool.py not found, cannot generate {args.dust_file}")
+                    except Exception as e:
+                        print(f"Error attempting to generate dust opacity file: {e}")
+                    
+                    print(f"Warning: Dust file {args.dust_file} not found or could not be generated.")
+                    print(f"Current directory: {os.getcwd()}")
                     print("Current directory contents:", os.listdir("."))
-                    print("Original directory contents:", os.listdir(os.path.dirname(os.path.abspath(__file__))))
-                    print("Parent directory contents:", os.listdir(parent_dir))
         
         # Parse temperature ranges if using temperature-dependent opacities
         if args.temp_dependent:
@@ -729,7 +1445,9 @@ def main():
             Rlobe=args.Rlobe * au,
             oangle=oangle_rad,
             width=args.width,
-            scattering_mode_max=args.scattering_mode_max
+            scattering_mode_max=args.scattering_mode_max,
+            dust_material=args.dust_material,
+            dust_size=args.dust_size
         )
         
         # Backup original density for temperature-dependent iterations
@@ -739,9 +1457,9 @@ def main():
         # Create initial dustopac.inp file
         from create_input import create_dustopac
         if args.temp_dependent:
-            create_dustopac(temp_dependent=True)
+            create_dustopac(temp_dependent=True, dust_material=args.dust_material, dust_size=args.dust_size)
         else:
-            create_dustopac(water_fountain=True)
+            create_dustopac(water_fountain=True, dust_material=args.dust_material, dust_size=args.dust_size)
         
         # Create RADMC-3D control file
         from create_input import create_radmc3d_control
@@ -762,10 +1480,10 @@ def main():
             
             # Verify that opacity files exist before starting
             required_files = [
-                'dustkapscatmat_E40R_10K_a0.3.inp',
-                'dustkapscatmat_E40R_100K_a0.3.inp', 
-                'dustkapscatmat_E40R_200K_a0.3.inp',
-                'dustkapscatmat_E40R_300K_a0.3.inp'
+                f'dustkapscatmat_{args.dust_material}_10K_a{args.dust_size}.inp',
+                f'dustkapscatmat_{args.dust_material}_100K_a{args.dust_size}.inp', 
+                f'dustkapscatmat_{args.dust_material}_200K_a{args.dust_size}.inp',
+                f'dustkapscatmat_{args.dust_material}_300K_a{args.dust_size}.inp'
             ]
             
             print("\nVerifying opacity files...")
@@ -775,15 +1493,69 @@ def main():
                     missing_files.append(file)
             
             if missing_files:
-                print("ERROR: The following required opacity files are missing:")
-                for file in missing_files:
-                    print(f"  - {file}")
-                print("\nPlease make sure these files exist in the current directory.")
-                print("Current directory contents:")
-                for file in os.listdir('.'):
-                    if file.startswith('dustkap'):
+                print("Some required opacity files are missing. Attempting to generate them with run_optool.py...")
+                
+                # Check if run_optool.py exists in the current directory or original directory
+                run_optool_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run_optool.py")
+                parent_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+                if not os.path.exists(run_optool_path):
+                    run_optool_path = os.path.join(parent_dir, "run_optool.py")
+                
+                if os.path.exists("run_optool.py") or os.path.exists(run_optool_path):
+                    try:
+                        # Use local or found run_optool.py
+                        optool_script = "run_optool.py" if os.path.exists("run_optool.py") else run_optool_path
+                        
+                        # Run the optool script to generate dust opacity files
+                        cmd = [
+                            sys.executable, optool_script, 
+                            '--material', args.dust_material,
+                            '--grain-size', str(args.dust_size),
+                            '--temperatures', '10,100,200,300'
+                        ]
+                        print(f"Running: {' '.join(cmd)}")
+                        subprocess.run(cmd, check=True)
+                        
+                        # Check if files were generated
+                        still_missing = []
+                        for file in missing_files:
+                            if not os.path.exists(file):
+                                still_missing.append(file)
+                        
+                        if still_missing:
+                            print("ERROR: The following required opacity files are still missing after generation attempt:")
+                            for file in still_missing:
+                                print(f"  - {file}")
+                            print("\nPlease make sure these files exist in the current directory.")
+                            print("Current directory contents:")
+                            for file in os.listdir('.'):
+                                if file.startswith('dustkap'):
+                                    print(f"  - {file}")
+                            return 1
+                        else:
+                            print("All required opacity files were successfully generated.")
+                    except Exception as e:
+                        print(f"Error running run_optool.py: {e}")
+                        print("ERROR: The following required opacity files are missing:")
+                        for file in missing_files:
+                            print(f"  - {file}")
+                        print("\nPlease make sure these files exist in the current directory.")
+                        print("Current directory contents:")
+                        for file in os.listdir('.'):
+                            if file.startswith('dustkap'):
+                                print(f"  - {file}")
+                        return 1
+                else:
+                    print("ERROR: The following required opacity files are missing:")
+                    for file in missing_files:
                         print(f"  - {file}")
-                return 1
+                    print("\nrun_optool.py script not found to generate the files.")
+                    print("Please make sure these files exist in the current directory.")
+                    print("Current directory contents:")
+                    for file in os.listdir('.'):
+                        if file.startswith('dustkap'):
+                            print(f"  - {file}")
+                    return 1
             else:
                 print("All required opacity files found.")
             
@@ -793,7 +1565,7 @@ def main():
             
             # Create temporary single-species dust opacity file
             from create_input import create_single_dust_opacity
-            create_single_dust_opacity(extension='E40R_300K_a0.3')
+            create_single_dust_opacity(dust_material=args.dust_material, dust_temperature='300K', dust_size=args.dust_size)
             
             # Verify the dustopac.inp file content
             print("dustopac.inp content:")
@@ -969,7 +1741,7 @@ def main():
                 write_temp_dependent_density(new_density, grid_info)
                 
                 # Make sure we're using the multi-species dust opacity file
-                create_dustopac(temp_dependent=True)
+                create_dustopac(temp_dependent=True, dust_material=args.dust_material, dust_size=args.dust_size)
                 
                 # Verify the dustopac.inp file content
                 print("Multi-species dustopac.inp content:")
@@ -1345,7 +2117,7 @@ def main():
     if args.compute_sed:
         # Check that all required files exist for SED computation
         required_files = ['dust_temperature.dat', 'amr_grid.inp', 'wavelength_micron.inp', 
-                         'dustopac.inp', 'dust_density.inp', 'stars.inp', 'radmc3d.inp']
+                         'dust_density.inp', 'stars.inp', 'radmc3d.inp']
         
         missing_files = []
         for file in required_files:
@@ -1374,6 +2146,195 @@ def main():
         
         print("\n=== Computing SED ===")
         print(f"Observer position: inclination = {args.inclination}°, phi = {args.phi}°")
+        
+        # Check if we need to regenerate dustopac.inp with the correct material and size
+        from create_input import verify_dust_opacity_files, create_dustopac
+        
+        # First, save current directory to return to it later if needed
+        current_dir = os.getcwd()
+        
+        # Check dust opacity files
+        if args.temp_dependent:
+            # Check temperature-dependent dust opacity files
+            files_exist, missing_opacity_files = verify_dust_opacity_files(
+                dust_material=args.dust_material, 
+                dust_size=args.dust_size,
+                temp_dependent=True
+            )
+            
+            if not files_exist:
+                print(f"\nWARNING: Missing temperature-dependent dust opacity files for {args.dust_material} with size {args.dust_size}μm")
+                print("Will attempt to generate them using run_optool.py...")
+                
+                # Try to generate missing files
+                if os.path.exists('run_optool.py'):
+                    try:
+                        cmd = [
+                            sys.executable, 'run_optool.py',
+                            '--material', args.dust_material,
+                            '--grain-size', str(args.dust_size),
+                            '--temperatures', '10,100,200,300',
+                            '--output-dir', '.'
+                        ]
+                        print(f"Running: {' '.join(cmd)}")
+                        subprocess.run(cmd, check=True)
+                        
+                        # Check again if files were created
+                        files_exist, still_missing = verify_dust_opacity_files(
+                            dust_material=args.dust_material,
+                            dust_size=args.dust_size,
+                            temp_dependent=True
+                        )
+                        
+                        if not files_exist:
+                            print("\nWARNING: Could not generate all required dust opacity files.")
+                            print("SED calculation may fail!")
+                        else:
+                            print("Successfully generated all required dust opacity files.")
+                    except Exception as e:
+                        print(f"Error running run_optool.py: {e}")
+                        print("SED calculation may fail!")
+                else:
+                    print("run_optool.py not found. Cannot generate missing files.")
+                    print("SED calculation may fail!")
+            
+            # (Re)create dustopac.inp with the correct material and size
+            create_dustopac(temp_dependent=True, dust_material=args.dust_material, dust_size=args.dust_size)
+            print(f"Created dustopac.inp for temperature-dependent opacities with material {args.dust_material} and size {args.dust_size}μm")
+            
+            # If output_dir is different from current_dir, update dustopac.inp there as well
+            output_dir_abs = os.path.abspath(args.output_dir)
+            current_dir_abs = os.path.abspath('.')
+            if output_dir_abs != current_dir_abs and os.path.exists(output_dir_abs):
+                # Save current dustopac.inp to the output directory
+                if os.path.exists('dustopac.inp'):
+                    shutil.copy('dustopac.inp', os.path.join(output_dir_abs, 'dustopac.inp'))
+                    print(f"Copied updated dustopac.inp to {output_dir_abs}")
+            
+        else:
+            # Check single dust opacity file
+            files_exist, missing_opacity_files = verify_dust_opacity_files(
+                dust_material=args.dust_material,
+                dust_size=args.dust_size,
+                temp_dependent=False
+            )
+            
+            if not files_exist:
+                print(f"\nWARNING: Missing dust opacity file for {args.dust_material} with size {args.dust_size}μm")
+                print("Will attempt to generate it using run_optool.py...")
+                
+                # Try to generate missing file
+                if os.path.exists('run_optool.py'):
+                    try:
+                        cmd = [
+                            sys.executable, 'run_optool.py',
+                            '--material', args.dust_material,
+                            '--grain-size', str(args.dust_size),
+                            '--no-temp-dependent',
+                            '--output-dir', '.'
+                        ]
+                        print(f"Running: {' '.join(cmd)}")
+                        subprocess.run(cmd, check=True)
+                        
+                        # Check again if file was created
+                        files_exist, still_missing = verify_dust_opacity_files(
+                            dust_material=args.dust_material,
+                            dust_size=args.dust_size,
+                            temp_dependent=False
+                        )
+                        
+                        if not files_exist:
+                            print("\nWARNING: Could not generate required dust opacity file.")
+                            print("SED calculation may fail!")
+                        else:
+                            print("Successfully generated required dust opacity file.")
+                    except Exception as e:
+                        print(f"Error running run_optool.py: {e}")
+                        print("SED calculation may fail!")
+                else:
+                    print("run_optool.py not found. Cannot generate missing file.")
+                    print("SED calculation may fail!")
+            
+            # (Re)create dustopac.inp with the correct material and size
+            from create_input import copy_dust_opacity
+            main_opacity_file = f'dustkapscatmat_{args.dust_material}_300K_a{args.dust_size}.inp'
+            
+            # Make sure we have the file
+            if os.path.exists(main_opacity_file):
+                # Copy the file to the standard name used in non-temperature-dependent mode
+                copy_dust_opacity(dust_file=main_opacity_file, new_name='dust_kapscatmat_1.inp')
+                
+                # Create dustopac.inp with the correct parameters
+                create_dustopac(nspecies=1, scattering_mode=args.scattering_mode_max,
+                               water_fountain=False, dust_material=args.dust_material, dust_size=args.dust_size)
+                print(f"Created dustopac.inp for single opacity with material {args.dust_material} and size {args.dust_size}μm")
+                
+                # If output_dir is different from current_dir, copy the files there as well
+                output_dir_abs = os.path.abspath(args.output_dir)
+                current_dir_abs = os.path.abspath('.')
+                if output_dir_abs != current_dir_abs and os.path.exists(output_dir_abs):
+                    # Copy dust_kapscatmat_1.inp to the output directory
+                    if os.path.exists('dust_kapscatmat_1.inp'):
+                        shutil.copy('dust_kapscatmat_1.inp', os.path.join(output_dir_abs, 'dust_kapscatmat_1.inp'))
+                        print(f"Copied dust_kapscatmat_1.inp to {output_dir_abs}")
+                    
+                    # Copy dustopac.inp to the output directory
+                    if os.path.exists('dustopac.inp'):
+                        shutil.copy('dustopac.inp', os.path.join(output_dir_abs, 'dustopac.inp'))
+                        print(f"Copied updated dustopac.inp to {output_dir_abs}")
+            else:
+                print(f"WARNING: Required dust opacity file {main_opacity_file} not found.")
+                print("SED calculation may fail!")
+                
+        # Force creation of correct dustopac.inp directly in the output directory
+        if os.path.exists(args.output_dir) and os.path.abspath(args.output_dir) != os.path.abspath('.'):
+            print(f"\nEnsuring correct dustopac.inp in output directory {args.output_dir}...")
+            
+            # Temporarily change to output directory
+            os.chdir(args.output_dir)
+            
+            # Check if we have the required opacity files here
+            try:
+                # Try to use files that exist in this directory
+                if args.temp_dependent:
+                    if all(os.path.exists(f'dustkapscatmat_{args.dust_material}_{temp}K_a{args.dust_size}.inp') 
+                          for temp in ['10', '100', '200', '300']):
+                        # Create the dustopac.inp file with the correct parameters
+                        create_dustopac(temp_dependent=True, dust_material=args.dust_material, dust_size=args.dust_size)
+                        print(f"Created proper dustopac.inp in {args.output_dir} with material {args.dust_material} and size {args.dust_size}μm")
+                    else:
+                        print(f"WARNING: Not all required temperature-dependent opacity files exist in {args.output_dir}")
+                        print("Using current dustopac.inp which may have incorrect material/size settings")
+                else:
+                    # Single species
+                    main_file = f'dustkapscatmat_{args.dust_material}_300K_a{args.dust_size}.inp'
+                    if os.path.exists(main_file):
+                        # Copy to the standard name and create dustopac.inp
+                        copy_dust_opacity(dust_file=main_file, new_name='dust_kapscatmat_1.inp')
+                        create_dustopac(nspecies=1, scattering_mode=args.scattering_mode_max,
+                                      water_fountain=False, dust_material=args.dust_material, dust_size=args.dust_size)
+                        print(f"Created proper dustopac.inp in {args.output_dir} with material {args.dust_material} and size {args.dust_size}μm")
+                    else:
+                        print(f"WARNING: Required opacity file {main_file} not found in {args.output_dir}")
+                        print("Using current dustopac.inp which may have incorrect material/size settings")
+            except Exception as e:
+                print(f"Error creating dustopac.inp in output directory: {e}")
+            
+            # Return to original directory
+            os.chdir(current_dir)
+        
+        # Display which dust opacity files are being used
+        if os.path.exists('dustopac.inp'):
+            print("\nUsing dust opacity files for:")
+            if args.temp_dependent:
+                print(f"  - Material: {args.dust_material}")
+                print(f"  - Grain size: {args.dust_size}μm")
+                print(f"  - Temperature ranges: <50K, 50-150K, 150-250K, >250K")
+                print(f"  - Files: dustkapscatmat_{args.dust_material}_[10K,100K,200K,300K]_a{args.dust_size}.inp")
+            else:
+                print(f"  - Material: {args.dust_material}")
+                print(f"  - Grain size: {args.dust_size}μm")
+                print(f"  - File: dustkapscatmat_{args.dust_material}_300K_a{args.dust_size}.inp (copied to dust_kapscatmat_1.inp)")
         
         # Run RADMC-3D with the sed command
         sed_cmd = f"sed"
