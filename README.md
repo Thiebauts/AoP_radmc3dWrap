@@ -145,7 +145,7 @@ python main_radmc3d.py --Mdlobe 0.001 --Rlobe 3000 --oangle 15
 To customize the convergence parameters:
 
 ```bash
-python main_radmc3d.py --nphotons_start 1e6 --nphotons_max 1e8 --threshold 0.005 --max_iterations 8
+python main_radmc3d.py --nphotons_start 1e6 --nphotons_max 1e8 --threshold 0.005 --iterations 10
 ```
 
 To disable temperature-dependent dust opacities (which are enabled by default):
@@ -157,7 +157,7 @@ python main_radmc3d.py --no_temp_dependent
 To customize temperature-dependent dust opacity calculations:
 
 ```bash
-python main_radmc3d.py --temp_ranges 50,150,250 --max_temp_iterations 5 --temp_threshold 0.05 --cells_change_threshold 0.5
+python main_radmc3d.py --temp_ranges 50,150,250 --iterations 5 --threshold 0.05 --cells_change_threshold 0.5
 ```
 
 ### SED Calculation Options
@@ -269,6 +269,10 @@ python main_radmc3d.py --sed_only --input_dir simulation_data --output_dir sed_r
 - `--no_temp_dependent`: Disable temperature-dependent dust opacities (enabled by default)
 - `--temp_ranges`: Temperature range boundaries for dust opacity selection (default: "50,150,250")
 - `--dust_file`: Dust opacity file for single-species models (default: "dustkapscatmat_E40R_300K_a0.3.inp")
+- `--scattering_mode_max`: Scattering mode for RADMC-3D (default: 1)
+  - 0: No scattering (absorption only)
+  - 1: Isotropic scattering
+  - 2-3-4-5: Anisotropic scattering (see RADMC-3D Documentation)
 
 ### Calculation Control
 
@@ -276,12 +280,9 @@ python main_radmc3d.py --sed_only --input_dir simulation_data --output_dir sed_r
 - `--nphotons_start`: Initial number of photon packages (default: 1e4)
 - `--nphotons_max`: Maximum number of photon packages (default: 1e8)
 - `--scale_factor`: Factor to increase photons by each iteration (default: 2.0)
-- `--threshold`: Convergence threshold for mean relative temperature difference in normal calculations (default: 2%)
-- `--max_iterations`: Maximum number of iterations (default: 8)
-- `--temp_threshold`: Convergence threshold for mean relative temperature difference in temperature-dependent opacity iterations (default: 2%)
-- `--cells_change_threshold`: Convergence threshold for cells changing temperature groups (default: 1%)
-- `--max_temp_iterations`: Maximum number of temperature-dependent opacity iterations (default: 8)
-- `--setseed`: Random seed for reproducibility (default: None)
+- `--threshold`: Convergence threshold for temperature difference in all calculations (default: 2%)
+- `--iterations`: Maximum number of iterations for all calculation types (default: 8)
+- `--cells_change_threshold`: Threshold for cells changing temperature groups (default: 1%)
 - `--density_weighted`: Use density-weighted convergence metrics (default: False)
 
 #### SED Calculation Parameters
@@ -380,4 +381,11 @@ The code provides several visualization options for multi-species models:
 - Added ability to compute SED from existing data without rerunning temperature calculations
 - Added visualization-only mode to generate plots from existing data
 - Improved error handling for file operations
-- Added configurable scattering mode through new `--scattering_mode_max` command line argument
+
+### v1.2.0
+- Added support for configurable scattering mode through the `--scattering_mode_max` parameter
+- Removed `--setseed` parameter for simplicity
+- Fixed parameter passing for scattering_mode_max to ensure consistent behavior
+- Fixed bugs related to path misconnections between input and output directories
+- Merged related input parameters for temperature calculations to improve usability
+- Streamlined temperature convergence thresholds for consistent behavior across calculation modes

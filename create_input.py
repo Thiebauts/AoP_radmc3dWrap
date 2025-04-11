@@ -524,7 +524,8 @@ def setup_water_fountain_model(rin=100*au, rout=5000*au, nr=1000, ntheta=150,
                              stellar_radius=288*Rsun, stellar_mass=1*Msun, stellar_temp=3000,
                              Mdtorus=1.0/200, Mdlobe=0.1/200, 
                              Rtorus=1000*au, A=1, B=3, C=0, D=10, E=3, F=2,
-                             Rlobe=2500*au, oangle=np.pi/10, width=0.005):
+                             Rlobe=2500*au, oangle=np.pi/10, width=0.005,
+                             scattering_mode_max=1):
     """
     Set up a complete water fountain model with torus and outflow lobes.
     
@@ -558,6 +559,8 @@ def setup_water_fountain_model(rin=100*au, rout=5000*au, nr=1000, ntheta=150,
         Opening angle of the outflow cavity in radians
     width : float
         Width parameter for the outflow lobes
+    scattering_mode_max : int
+        Maximum scattering mode (0=no scattering, 1=isotropic, 2=anisotropic)
         
     Returns:
     --------
@@ -605,7 +608,13 @@ def setup_water_fountain_model(rin=100*au, rout=5000*au, nr=1000, ntheta=150,
     create_dustopac(water_fountain=True)
     
     # Create the RADMC-3D control file
-    create_radmc3d_control(nphot_therm=1000000, istar_sphere=1, water_fountain=True)
+    create_radmc3d_control(
+        nphot_therm=1000000, 
+        scattering_mode_max=scattering_mode_max,
+        modified_random_walk=1, 
+        istar_sphere=1, 
+        water_fountain=True
+    )
     
     print(f"Water fountain model setup complete with masses: torus={Mdtorus:.6f} Msun, lobe={Mdlobe:.6f} Msun")
     
@@ -846,12 +855,16 @@ def setup_model(grid_type='cartesian', model_type='water_fountain', **kwargs):
         oangle = kwargs.get('oangle', np.pi/10)
         width = kwargs.get('width', 0.005)
         
+        # Get scattering_mode_max with default value 1
+        scattering_mode_max = kwargs.get('scattering_mode_max', 1)
+        
         return setup_water_fountain_model(
             rin=rin, rout=rout, nr=nr, ntheta=ntheta,
             stellar_radius=stellar_radius, stellar_mass=stellar_mass, stellar_temp=stellar_temp,
             Mdtorus=Mdtorus, Mdlobe=Mdlobe,
             Rtorus=Rtorus, A=A, B=B, C=C, D=D, E=E, F=F,
-            Rlobe=Rlobe, oangle=oangle, width=width
+            Rlobe=Rlobe, oangle=oangle, width=width,
+            scattering_mode_max=scattering_mode_max
         )
     else:
         # Extract common parameters
@@ -911,13 +924,14 @@ def setup_model(grid_type='cartesian', model_type='water_fountain', **kwargs):
         
         # Create control file
         modified_random_walk = kwargs.get('modified_random_walk', 1)
+        scattering_mode_max = kwargs.get('scattering_mode_max', scattering_mode)
         create_radmc3d_control(nphot_therm=nphot_therm, 
-                              scattering_mode_max=scattering_mode,
+                              scattering_mode_max=scattering_mode_max,
                               modified_random_walk=modified_random_walk,
                               istar_sphere=1, water_fountain=False)
         
         print(f"Model setup complete. Type: {model_type} on {grid_type} grid. Ready to run RADMC-3D.")
-        return grid, rho 
+        return grid, rho
 
 def copy_temp_dependent_dust_opacities(base_path='.'):
     """
@@ -952,7 +966,12 @@ def copy_temp_dependent_dust_opacities(base_path='.'):
         for file in existing_files:
             print(f"  - {file}")
     
-    # Check which files exist in the source directory
+    # Check if all required files exist in the current directory
+    if len(existing_files) == len(opacity_files):
+        print("All required opacity files found in current directory.")
+        return True
+    
+    # If not all files are in current directory, check the source directory
     source_files = []
     for file in opacity_files:
         source = os.path.join(base_path, file)
@@ -963,32 +982,35 @@ def copy_temp_dependent_dust_opacities(base_path='.'):
     for file in source_files:
         print(f"  - {file}")
     
-    # Copy the files
+    # Copy the files that don't already exist
     success = True
     for file in opacity_files:
-        source = os.path.join(base_path, file)
-        try:
-            if os.path.exists(source):
-                shutil.copy(source, file)
-                print(f"Copied {file}")
-            else:
-                print(f"Warning: Dust file {file} not found in {base_path}")
+        if file not in existing_files:
+            source = os.path.join(base_path, file)
+            try:
+                if os.path.exists(source):
+                    shutil.copy(source, file)
+                    print(f"Copied {file}")
+                else:
+                    print(f"Warning: Dust file {file} not found in {base_path}")
+                    success = False
+            except Exception as e:
+                print(f"Error copying {file}: {e}")
                 success = False
-        except Exception as e:
-            print(f"Error copying {file}: {e}")
-            success = False
     
     # Final verification
-    if success:
-        print("All opacity files were copied successfully.")
+    all_files_exist = all(os.path.exists(file) for file in opacity_files)
+    
+    if all_files_exist:
+        print("All opacity files are available in the current directory.")
+        return True
     else:
         print("WARNING: Not all opacity files were found or copied.")
         print("Current directory contents:")
         for file in os.listdir('.'):
             if file.startswith('dustkap'):
                 print(f"  - {file}")
-    
-    return success 
+        return False
 
 def create_single_dust_opacity(extension='E40R_300K_a0.3'):
     """

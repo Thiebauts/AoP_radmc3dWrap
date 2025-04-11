@@ -260,7 +260,7 @@ def check_convergence(current_temp, previous_temp, threshold=0.01, density_weigh
     else:
         return is_converged
 
-def run_radmc3d(cmd='mctherm', params=None, verbose=True, setseed=None):
+def run_radmc3d(cmd='mctherm', params=None, verbose=True):
     """
     Run RADMC-3D with the specified command and parameters.
     
@@ -272,8 +272,6 @@ def run_radmc3d(cmd='mctherm', params=None, verbose=True, setseed=None):
         Dictionary of parameters to pass to RADMC-3D
     verbose : bool
         Whether to print RADMC-3D output
-    setseed : int
-        Random seed for reproducibility
         
     Returns:
     --------
@@ -291,10 +289,6 @@ def run_radmc3d(cmd='mctherm', params=None, verbose=True, setseed=None):
         for key, value in params.items():
             command.append(f"{key}={value}")
     
-    # Add random seed if specified
-    if setseed is not None:
-        command.append(f"setseed={setseed}")
-    
     # Convert command list to string
     command_str = ' '.join(command)
     
@@ -302,7 +296,7 @@ def run_radmc3d(cmd='mctherm', params=None, verbose=True, setseed=None):
     if verbose:
         print(f"Running: {command_str}")
     
-    # Run command
+    # Run command - will be executed in current directory (which should be output_dir)
     process = subprocess.Popen(command_str, shell=True)
     process.communicate()
     return process.returncode

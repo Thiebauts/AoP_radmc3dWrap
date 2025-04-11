@@ -70,7 +70,7 @@ def iterative_mctherm(nphotons_start=1e6, nphotons_max=1e8,
                       scale_factor=5.0, convergence_threshold=0.01,
                       max_iterations=10, plot_slices=True, plot_progress=True,
                       density_weighted=False, density_array=None,
-                      return_temp_history=False, setseed=None,
+                      return_temp_history=False,
                       multi_species_handling='specific', species_index=0,
                       scattering_mode_max=1):
     """
@@ -99,8 +99,6 @@ def iterative_mctherm(nphotons_start=1e6, nphotons_max=1e8,
         Density array for weighted convergence checking
     return_temp_history : bool
         Whether to return full temperature history arrays
-    setseed : int, optional
-        Random seed for reproducible results
     multi_species_handling : str
         How to handle multiple species: 'specific', 'average', 'weighted_avg', or 'all'
     species_index : int
@@ -146,7 +144,7 @@ def iterative_mctherm(nphotons_start=1e6, nphotons_max=1e8,
             f.write('istar_sphere = 1\n')
         
         # Run RADMC-3D Monte Carlo thermal calculation
-        run_radmc3d(cmd='mctherm', setseed=setseed)
+        run_radmc3d(cmd='mctherm')
         
         # Read temperature data
         temp_data, grid_info = read_dust_temperature()
@@ -286,21 +284,24 @@ def parse_arguments():
     parser.add_argument('--oangle', type=float, default=18, help='Opening angle in degrees')
     parser.add_argument('--width', type=float, default=0.005, help='Lobe width parameter')
     
-    # Convergence parameters
-    parser.add_argument('--nphotons_start', type=float, default=1e4, help='Initial number of photon packages')
-    parser.add_argument('--nphotons_max', type=float, default=1e8, help='Maximum number of photon packages')
-    parser.add_argument('--scale_factor', type=float, default=2.0, help='Factor to increase photons by each iteration')
-    parser.add_argument('--threshold', type=float, default=0.02, help='Convergence threshold for mean relative temperature difference')
-    parser.add_argument('--max_iterations', type=int, default=8, help='Maximum number of iterations')
+    # Physics and Convergence Parameters
+    physics = parser.add_argument_group('Physics and Convergence Parameters')
+    physics.add_argument('--nphotons_start', type=float, default=1e4, help='Initial number of photon packages')
+    physics.add_argument('--nphotons_max', type=float, default=1e8, help='Maximum number of photon packages')
+    physics.add_argument('--scale_factor', type=float, default=2.0, help='Factor to increase photons by each iteration')
+    physics.add_argument('--threshold', type=float, default=0.02, help='Convergence threshold for temperature difference (default: 2%%)')
+    physics.add_argument('--iterations', type=int, default=8, help='Maximum number of iterations for all calculation types')
+    physics.add_argument('--density_weighted', action='store_true', help='Use density-weighted convergence metrics')
+    physics.add_argument('--cells_change_threshold', type=float, default=1.0, help='Threshold for cells changing temperature groups (default: 1%%)')
+    physics.add_argument('--temp_ranges', type=str, default="50,150,250", help='Temperature range boundaries for dust opacity selection (K)')
+    physics.add_argument('--dust_file', default="dustkapscatmat_E40R_300K_a0.3.inp", help='Dust opacity file for single-species models')
+    physics.add_argument('--scattering_mode_max', type=int, default=1, help='Maximum scattering mode (0=no scattering, 1=isotropic, 2=anisotropic)')
     
     # Other options
     parser.add_argument('--no_plots', action='store_true', help='Disable plotting')
-    parser.add_argument('--density_weighted', action='store_true', help='Use density-weighted convergence metrics')
-    parser.add_argument('--setseed', type=int, default=None, help='Random seed for reproducibility')
     parser.add_argument('--output_dir', type=str, default='radmc3d_model', help='Output directory name')
     parser.add_argument('--input_dir', type=str, default=None, 
                       help='Input directory containing existing data files (for --plot_only or --sed_only)')
-    parser.add_argument('--dust_file', type=str, default='dustkapscatmat_E40R_300K_a0.3.inp', help='Dust opacity file')
     
     # Add advanced visualization option
     parser.add_argument('--advanced_plots', action='store_true', help='Create advanced temperature and density visualizations')
@@ -311,42 +312,26 @@ def parse_arguments():
     
     # Add temperature-dependent dust opacity options (now default)
     parser.add_argument('--no_temp_dependent', action='store_true', help='Disable temperature-dependent dust opacities')
-    parser.add_argument('--temp_ranges', type=str, default='50,150,250', 
-                       help='Temperature range boundaries for dust opacity selection (comma-separated)')
-    parser.add_argument('--max_temp_iterations', type=int, default=8, 
-                       help='Maximum number of temperature-dependent opacity iterations')
-    parser.add_argument('--temp_threshold', type=float, default=0.02, 
-                       help='Convergence threshold for mean relative temperature difference in opacity iterations')
-    parser.add_argument('--cells_change_threshold', type=float, default=1.0,
-                       help='Convergence threshold for cells changing temperature groups (percentage)')
     
     # Add multi-species visualization options
-    parser.add_argument('--species_index', type=int, default=0, 
-                       help='Dust species index to plot when using multiple species (0-3, default: 0)')
+    parser.add_argument('--species_index', type=int, default=0, help='Dust species index to plot (0-3)')
     parser.add_argument('--multi_species_handling', type=str, default='specific', 
-                       choices=['specific', 'average', 'weighted_avg', 'all'],
-                       help='How to handle multiple species in plots: "specific" (use the species_index), '
-                            '"average" (average over all species), "weighted_avg" (density-weighted average), '
-                            'or "all" (create panel of all species)')
+                      choices=['specific', 'average', 'weighted_avg', 'all'],
+                      help='How to handle multiple species in plots: specific=show only species_index, '
+                           'average=average temp across species, weighted_avg=weight by density, '
+                           'all=show all species as separate panels')
     
-    # Add SED calculation parameters
+    # Add SED calculation options
     parser.add_argument('--no_compute_sed', action='store_true', help='Disable SED computation after temperature calculation')
-    parser.add_argument('--sed_only', action='store_true', 
-                      help='Only compute SED using existing dust_temperature.dat file (skips temperature calculation)')
-    parser.add_argument('--inclination', type=float, default=0, help='Observer\'s inclination angle in degrees')
-    parser.add_argument('--phi', type=float, default=0, help='Observer\'s azimuthal angle in degrees')
-    parser.add_argument('--no_sloppy', action='store_true', 
-                      help='Disable "sloppy" option in SED calculation for more accurate but slower results')
+    parser.add_argument('--sed_only', action='store_true', help='Only compute SED using existing dust_temperature.dat file')
+    parser.add_argument('--inclination', type=float, default=0, help='Observer inclination angle in degrees')
+    parser.add_argument('--phi', type=float, default=0, help='Observer azimuthal angle in degrees')
+    parser.add_argument('--no_sloppy', action='store_true', help='Disable sloppy integration in SED calculation')
     
-    # Add option to use existing temperature file
-    parser.add_argument('--use_existing_temperature', action='store_true', 
-                      help='Skip temperature calculation and use existing dust_temperature.dat file')
-    parser.add_argument('--temperature_file', type=str, default='dust_temperature.dat',
+    # Add existing temperature file option
+    parser.add_argument('--use_existing_temperature', action='store_true', help='Use existing dust_temperature.dat file (skip calculation)')
+    parser.add_argument('--temperature_file', type=str, default='dust_temperature.dat', 
                       help='Path to existing dust temperature file (when using --use_existing_temperature)')
-    
-    # Physics Parameters
-    parser.add_argument('--scattering_mode_max', type=int, default=1, 
-                      help='Maximum scattering mode (0=no scattering, 1=isotropic, 2=anisotropic)')
     
     args = parser.parse_args()
     # Set temp_dependent to True by default (use --no_temp_dependent to disable)
@@ -371,19 +356,31 @@ def parse_arguments():
 
 def main():
     """Main function"""
+    
+    # Parse command line arguments
     args = parse_arguments()
+    
+    # Store the original directory (where the script is being run from)
+    original_dir = os.path.abspath(os.getcwd())
+    
+    # Convert input_dir to absolute path if provided
+    if args.input_dir is not None:
+        args.input_dir = os.path.abspath(args.input_dir)
     
     # Handle input_dir vs output_dir for plot_only and sed_only modes
     if args.input_dir is not None and (args.plot_only or args.sed_only):
         input_dir = args.input_dir
-        output_dir = args.output_dir
         if not os.path.exists(input_dir):
             print("ERROR: Input directory '{}' does not exist".format(input_dir))
             return 1
         
-        # Create output directory if it doesn't exist
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
+        # Only create output directory if:
+        # 1. User specified a non-default output dir, or 
+        # 2. We need to save results somewhere different than the input dir
+        if args.output_dir != 'radmc3d_model' or args.input_dir != args.output_dir:
+            if not os.path.exists(args.output_dir):
+                os.makedirs(args.output_dir)
+                print(f"Created output directory: {args.output_dir}")
     else:
         # For normal operations, just use output_dir for everything
         input_dir = args.output_dir
@@ -392,17 +389,34 @@ def main():
         # Create output directory if it doesn't exist
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
+            print(f"Created output directory: {output_dir}")
+    
+    # Change to output directory for all operations
+    print(f"\n=== Changing to output directory: {args.output_dir} ===")
+    os.chdir(args.output_dir)
+    
+    # After changing directory, output_dir should be "." (current directory)
+    # This prevents using nested paths when we use output_dir later
+    output_dir = "."
+    
+    # Import required functions right after changing directory to avoid scope issues 
+    from create_input import setup_model, au, Rsun, Msun, verify_dust_temperature_file
+    from radmc3d_aux import (run_radmc3d, read_dust_temperature, check_convergence, 
+                           plot_convergence_history, analyze_temperature_distribution, 
+                           read_amr_grid, read_dust_density, plot_advanced_temperature_density, 
+                           plot_initial_dust_density, plot_temperature_dependent_summary,
+                           redistribute_density_by_temperature, write_temp_dependent_density)
     
     # Special message for plot-only mode
     if args.plot_only:
         print("\n=== PLOT-ONLY MODE ===")
         
         if args.input_dir:
-            print("Reading data from: {}".format(input_dir))
+            print("Reading data from: {}".format(args.input_dir))
             print("Saving plots to: {}".format(os.path.join(output_dir, args.figures_dir)))
             
             # Change to input directory to read files
-            os.chdir(input_dir)
+            os.chdir(args.input_dir)
         else:
             print("Reading data and saving plots in: {}".format(output_dir))
             # Change to output directory
@@ -438,22 +452,17 @@ def main():
         
         print("\n=== Loading data for plots ===")
         try:
-            # Import functions directly within this scope for safety
-            from radmc3d_aux import read_amr_grid as read_grid_func
-            from radmc3d_aux import read_dust_temperature as read_temp_func
-            from radmc3d_aux import read_dust_density as read_density_func
-            
             # Read the grid information using the local import
-            grid_info = read_grid_func()
+            grid_info = read_amr_grid()
             print("Successfully loaded grid information")
             
             # Read the temperature data
-            temp_data, _ = read_temp_func()
+            temp_data, _ = read_dust_temperature()
             print("Successfully loaded temperature data")
             
             # Try to read density data if available
             try:
-                density_data, _, _, _ = read_density_func(grid_info=grid_info)
+                density_data, _, _, _ = read_dust_density(grid_info=grid_info)
                 print("Successfully loaded density data")
             except Exception as e:
                 print("Could not read density data: {}".format(e))
@@ -572,34 +581,35 @@ def main():
     if args.sed_only:
         print("\n=== SED-ONLY MODE ===")
         
+        # Always make sure the output directory exists before trying to change to it
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+            print(f"Created output directory: {output_dir}")
+        
         if args.input_dir:
-            print("Reading data from: {}".format(input_dir))
-            print("Saving SED to: {}".format(output_dir))
+            print("Reading data from: {}".format(args.input_dir))
+            print("Saving SED to: {}".format(os.path.abspath(output_dir)))
             
             # Change to input directory to read files
-            os.chdir(input_dir)
+            os.chdir(args.input_dir)
             
             # Need to copy temperature file to output directory for radmc3d
-            if not os.path.samefile(input_dir, output_dir):
+            if not os.path.samefile(args.input_dir, os.path.abspath(output_dir)):
                 if os.path.exists('dust_temperature.dat'):
-                    # Ensure output dir exists
-                    if not os.path.exists(output_dir):
-                        os.makedirs(output_dir)
                     # Copy the temperature file
-                    shutil.copy('dust_temperature.dat', os.path.join(output_dir, 'dust_temperature.dat'))
+                    shutil.copy('dust_temperature.dat', os.path.join(os.path.abspath(output_dir), 'dust_temperature.dat'))
                     
                     # Copy other required files too
                     for req_file in ['amr_grid.inp', 'wavelength_micron.inp', 'dustopac.inp', 
                                     'dust_density.inp', 'stars.inp', 'radmc3d.inp']:
                         if os.path.exists(req_file):
-                            shutil.copy(req_file, os.path.join(output_dir, req_file))
+                            shutil.copy(req_file, os.path.join(os.path.abspath(output_dir), req_file))
                 
                 # Change to output directory for calculation
-                os.chdir(output_dir)
+                os.chdir(os.path.abspath(output_dir))
         else:
-            # Just use output directory
-            print("Computing SED in: {}".format(output_dir))
-            os.chdir(output_dir)
+            # We're already in the output directory (current directory)
+            print(f"Computing SED in current directory: {os.path.abspath('.')}")
             
         print("Observer position: inclination = {}°, phi = {}°".format(args.inclination, args.phi))
         
@@ -629,7 +639,10 @@ def main():
             # Load the temperature data for visualization if needed
             if args.advanced_plots and not args.sed_only:
                 try:
-                    # Grid info and temperature should be read using the already imported functions
+                    # Make sure the read_amr_grid function is properly imported
+                    from radmc3d_aux import read_amr_grid, read_dust_temperature
+                    
+                    # Read grid and temperature data
                     grid_info = read_amr_grid()
                     temp_data, _ = read_dust_temperature()
                     print("Successfully loaded temperature data for visualization")
@@ -646,24 +659,43 @@ def main():
         # Copy dust opacity file(s)
         if args.temp_dependent:
             from create_input import copy_temp_dependent_dust_opacities
-            # Try to copy all required dust opacity files from parent directory
-            if not copy_temp_dependent_dust_opacities(".."):
-                print("ERROR: Could not find all required temperature-dependent dust opacity files.")
-                print("Make sure all files exist in the parent directory:")
-                print("- dustkapscatmat_E40R_10K_a0.3.inp")
-                print("- dustkapscatmat_E40R_100K_a0.3.inp")
-                print("- dustkapscatmat_E40R_200K_a0.3.inp")
-                print("- dustkapscatmat_E40R_300K_a0.3.inp")
-                return 1
+            
+            # First try to use files from the current directory
+            if not copy_temp_dependent_dust_opacities("."):
+                print("Trying to find dust opacity files in original directory...")
+                if not copy_temp_dependent_dust_opacities(os.path.dirname(os.path.abspath(__file__))):
+                    print("Trying to find dust opacity files in parent of original directory...")
+                    # Try the parent of the original directory
+                    parent_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+                    if not copy_temp_dependent_dust_opacities(parent_dir):
+                        print("ERROR: Could not find all required temperature-dependent dust opacity files.")
+                        print("Make sure all files exist in either the original or parent directory:")
+                        print("- dustkapscatmat_E40R_10K_a0.3.inp")
+                        print("- dustkapscatmat_E40R_100K_a0.3.inp")
+                        print("- dustkapscatmat_E40R_200K_a0.3.inp")
+                        print("- dustkapscatmat_E40R_300K_a0.3.inp")
+                        return 1
         else:
-            # Copy single dust opacity file if needed
-            if os.path.exists(f"../{args.dust_file}"):
-                shutil.copy(f"../{args.dust_file}", ".")
-                print(f"Copied {args.dust_file} to {output_dir}")
+            # Check if the dust opacity file exists in current directory first
+            if os.path.exists(args.dust_file):
+                print(f"Using existing {args.dust_file} from current directory")
+            # Otherwise, try to copy from original directory
             else:
-                print(f"Warning: Dust file {args.dust_file} not found in parent directory")
-                print("Current directory:", os.getcwd())
-                print("Parent directory contents:", os.listdir(".."))
+                parent_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+                
+                if os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), args.dust_file)):
+                    shutil.copy(os.path.join(os.path.dirname(os.path.abspath(__file__)), args.dust_file), ".")
+                    print(f"Copied {args.dust_file} from original directory to {output_dir}")
+                # Otherwise, try to copy from parent directory
+                elif os.path.exists(os.path.join(parent_dir, args.dust_file)):
+                    shutil.copy(os.path.join(parent_dir, args.dust_file), ".")
+                    print(f"Copied {args.dust_file} from parent directory to {output_dir}")
+                else:
+                    print(f"Warning: Dust file {args.dust_file} not found in current, original or parent directory")
+                    print("Current directory:", os.getcwd())
+                    print("Current directory contents:", os.listdir("."))
+                    print("Original directory contents:", os.listdir(os.path.dirname(os.path.abspath(__file__))))
+                    print("Parent directory contents:", os.listdir(parent_dir))
         
         # Parse temperature ranges if using temperature-dependent opacities
         if args.temp_dependent:
@@ -696,7 +728,8 @@ def main():
             F=args.F,
             Rlobe=args.Rlobe * au,
             oangle=oangle_rad,
-            width=args.width
+            width=args.width,
+            scattering_mode_max=args.scattering_mode_max
         )
         
         # Backup original density for temperature-dependent iterations
@@ -768,7 +801,7 @@ def main():
                 print(f.read())
             
             # Run initial temperature calculation
-            run_radmc3d(cmd='mctherm', setseed=args.setseed)
+            run_radmc3d(cmd='mctherm')
             
             # Read the initial temperature
             temp_data, _ = read_dust_temperature()
@@ -915,9 +948,9 @@ def main():
             prev_groups = classify_temperature_groups(prev_temp, temp_ranges)
             
             # Outer loop for temperature-dependent iterations
-            while not temp_converged and temp_iterations < args.max_temp_iterations:
+            while not temp_converged and temp_iterations < args.iterations:
                 temp_iterations += 1
-                print(f"\n=== Temperature-dependent iteration {temp_iterations}/{args.max_temp_iterations} ===")
+                print(f"\n=== Temperature-dependent iteration {temp_iterations}/{args.iterations} ===")
                 
                 # Calculate number of photons for this iteration (increasing with each iteration)
                 current_nphotons = int(min(args.nphotons_start * (args.scale_factor**(temp_iterations-1)), args.nphotons_max))
@@ -953,7 +986,7 @@ def main():
                 # Run a new temperature calculation with the redistributed densities
                 print(f"\n=== Running mctherm with temperature-dependent opacities ({temp_iterations}) ===")
                 print(f"Using {current_nphotons:,} photon packages")
-                run_radmc3d(cmd='mctherm', setseed=args.setseed)
+                run_radmc3d(cmd='mctherm')
                 
                 # Read the new temperature
                 new_temp_data, _ = read_dust_temperature()
@@ -971,7 +1004,7 @@ def main():
                     metrics = check_convergence(
                         new_temp_data, 
                         prev_temp, 
-                        threshold=args.temp_threshold, 
+                        threshold=args.threshold, 
                         return_details=True
                     )
                     
@@ -1000,14 +1033,14 @@ def main():
                     prev_groups = new_groups.copy()
                     
                     # Update for next iteration - check both temperature convergence and group changes
-                    temp_converged = (metrics['mean_diff'] < args.temp_threshold and 
+                    temp_converged = (metrics['mean_diff'] < args.threshold and 
                                      cells_changed_percent < args.cells_change_threshold)
                     
                     # If converged, print reason
                     if temp_converged:
-                        if metrics['mean_diff'] < args.temp_threshold and cells_changed_percent < args.cells_change_threshold:
-                            print(f"\nConvergence reached: both temperature difference (<{args.temp_threshold*100:.1f}%) and group changes (<{args.cells_change_threshold:.1f}%) are below thresholds")
-                        elif metrics['mean_diff'] < args.temp_threshold:
+                        if metrics['mean_diff'] < args.threshold and cells_changed_percent < args.cells_change_threshold:
+                            print(f"\nConvergence reached: both temperature difference (<{args.threshold*100:.1f}%) and group changes (<{args.cells_change_threshold:.1f}%) are below thresholds")
+                        elif metrics['mean_diff'] < args.threshold:
                             print("\nConvergence reached: temperature difference is below threshold")
                         elif cells_changed_percent < args.cells_change_threshold:
                             print("\nConvergence reached: group changes are below threshold")
@@ -1028,6 +1061,11 @@ def main():
                         # Create figures directory if it doesn't exist
                         if not os.path.exists(args.figures_dir):
                             os.makedirs(args.figures_dir)
+                        
+                        # Import the advanced plotting function
+                        from radmc3d_aux import plot_advanced_temperature_density
+                        # Assign it to the variable used in the code
+                        plot_temp_func = plot_advanced_temperature_density
                         
                         # Try to read density data
                         try:
@@ -1110,7 +1148,7 @@ def main():
                     plot_temperature_dependent_summary(
                         metrics_history=temp_metrics_history,
                         cells_changed_history=cells_changed_history,
-                        temp_threshold=args.temp_threshold,
+                        temp_threshold=args.threshold,
                         cells_change_threshold=args.cells_change_threshold,
                         save_fig=True,
                         filename=summary_filename,
@@ -1138,13 +1176,12 @@ def main():
                 nphotons_max=args.nphotons_max,
                 scale_factor=args.scale_factor,
                 convergence_threshold=args.threshold,
-                max_iterations=args.max_iterations,
+                max_iterations=args.iterations,
                 plot_slices=not args.no_plots,
                 plot_progress=not args.no_plots,
                 density_weighted=args.density_weighted,
                 density_array=density if args.density_weighted else None,
                 return_temp_history=True,  # Always return temperature history if we need iteration plots
-                setseed=args.setseed,
                 multi_species_handling=args.multi_species_handling,
                 species_index=args.species_index,
                 scattering_mode_max=args.scattering_mode_max
@@ -1178,104 +1215,131 @@ def main():
                 pass
     
     # After the calculation finishes, add:
-    if args.advanced_plots and not using_existing_temp_file:
-        print("\n=== Creating advanced visualizations ===")
-        try:
-            # Create figures directory if it doesn't exist
-            if not os.path.exists(args.figures_dir):
-                os.makedirs(args.figures_dir)
-            
-            # Read the final temperature data if not already available
-            if 'temp_data' not in locals():
-                temp_data, grid_info = read_dust_temperature()
-            
-            # Try to read density data if available
+    if args.advanced_plots:
+        # Only proceed with advanced plots when:
+        # 1. Not in sed_only mode
+        # 2. Either we did a calculation OR we're using existing temp file 
+        if not args.sed_only and (not using_existing_temp_file or args.use_existing_temperature):
+            print("\n=== Creating advanced visualizations ===")
             try:
-                density_data, _, _, _ = read_dust_density(grid_info=grid_info)
+                # Create figures directory if it doesn't exist
+                if not os.path.exists(args.figures_dir):
+                    os.makedirs(args.figures_dir)
                 
-                # Create a high-quality visualization of the initial density structure
-                # This ensures we have this plot in both temperature-dependent and non-temperature-dependent cases
-                if not args.temp_dependent:
-                    print("\n=== Creating initial dust density visualization ===")
-                    density_stats = plot_initial_dust_density(
-                        grid_info=grid_info,
-                        density_data=density_data,
-                        output_dir=args.figures_dir,
-                        save_fig=True,
-                        show_fig=False,
-                        add_annotations=True
-                    )
+                # Import the advanced plotting function
+                from radmc3d_aux import plot_advanced_temperature_density, read_amr_grid, read_dust_temperature
+                # Assign it to the variable used in the code
+                plot_temp_func = plot_advanced_temperature_density
+                
+                # Read the temperature data if not already available
+                if 'temp_data' not in locals() or temp_data is None:
+                    try:
+                        temp_data, grid_info = read_dust_temperature()
+                        print("Read temperature data for visualization")
+                    except Exception as e:
+                        print(f"Error reading temperature data: {e}")
+                        print("Cannot create visualizations without temperature data")
+                        # Continue with the rest of the program
+                        return 0
+                
+                # If grid_info is not available, try to read it
+                if 'grid_info' not in locals() or grid_info is None:
+                    try:
+                        grid_info = read_amr_grid()
+                        print("Read grid information for visualization")
+                    except Exception as e:
+                        print(f"Error reading grid information: {e}")
+                        print("Cannot create visualizations without grid information")
+                        # Continue with the rest of the program
+                        return 0
+                
+                # Try to read density data if available
+                try:
+                    density_data, _, _, _ = read_dust_density(grid_info=grid_info)
                     
-                    if density_stats:
-                        print("\n=== Dust Density Statistics ===")
-                        print(f"Minimum density: {density_stats['min_density']:.2e} g/cm³")
-                        print(f"Maximum density: {density_stats['max_density']:.2e} g/cm³")
-                        print(f"Mean density: {density_stats['mean_density']:.2e} g/cm³")
-                        print(f"Median density: {density_stats['median_density']:.2e} g/cm³")
+                    # Create a high-quality visualization of the initial density structure
+                    # This ensures we have this plot in both temperature-dependent and non-temperature-dependent cases
+                    if not args.temp_dependent:
+                        print("\n=== Creating initial dust density visualization ===")
+                        density_stats = plot_initial_dust_density(
+                            grid_info=grid_info,
+                            density_data=density_data,
+                            output_dir=args.figures_dir,
+                            save_fig=True,
+                            show_fig=False,
+                            add_annotations=True
+                        )
+                        
+                        if density_stats:
+                            print("\n=== Dust Density Statistics ===")
+                            print(f"Minimum density: {density_stats['min_density']:.2e} g/cm³")
+                            print(f"Maximum density: {density_stats['max_density']:.2e} g/cm³")
+                            print(f"Mean density: {density_stats['mean_density']:.2e} g/cm³")
+                            print(f"Median density: {density_stats['median_density']:.2e} g/cm³")
+                    
+                except Exception as e:
+                    print(f"Could not read density data: {e}")
+                    density_data = None
                 
+                # Create advanced visualizations for final result
+                stats = plot_temp_func(
+                    grid_info=grid_info,
+                    temp_data=temp_data,
+                    density_data=density_data,
+                    output_dir=args.figures_dir,
+                    species=args.species_index,  # Use the specified species index
+                    multi_species_handling=args.multi_species_handling  # Use the specified handling method
+                )
+                
+                # Also create a dedicated temperature zone map for the final result
+                plot_temp_func(
+                    grid_info=grid_info,
+                    temp_data=temp_data,
+                    density_data=density_data,
+                    output_dir=args.figures_dir,
+                    species=args.species_index,
+                    multi_species_handling=args.multi_species_handling,
+                    save_fig=True,
+                    show_fig=False,
+                    create_zone_map=True  # Create a dedicated temperature zone map
+                )
+                
+                # Print additional temperature statistics
+                print("\n=== Temperature Statistics ===")
+                print(f"Minimum temperature: {stats['min_temperature']:.2f} K")
+                print(f"Maximum temperature: {stats['max_temperature']:.2f} K")
+                print(f"Mean temperature: {stats['mean_temperature']:.2f} K")
+                print(f"Median temperature: {stats['median_temperature']:.2f} K")
+                
+                # Create plots for each iteration if requested
+                if args.save_iter_plots and not args.temp_dependent and 'results' in locals() and 'temp_history' in results and results['temp_history']:
+                    print("\n=== Creating temperature plots for each iteration ===")
+                    temp_history = results['temp_history']
+                    
+                    for i, iter_temp in enumerate(temp_history, 1):
+                        # Create temperature plot for this iteration
+                        print(f"Creating plots for iteration {i}...")
+                        
+                        # Create advanced temperature plots for this iteration
+                        iter_stats = plot_temp_func(
+                            grid_info=grid_info,
+                            temp_data=iter_temp,
+                            density_data=density_data,  # Use the same density data for all iterations
+                            output_dir=args.figures_dir,  # Save directly to figures directory
+                            species=args.species_index,
+                            multi_species_handling=args.multi_species_handling,
+                            save_fig=True,
+                            show_fig=False,
+                            iteration=i
+                        )
+                        
+                        # No need to rename the files since they now include species information
+                    
+                    print(f"Iteration plots saved to {args.figures_dir}")
+                    
             except Exception as e:
-                print(f"Could not read density data: {e}")
-                density_data = None
-            
-            # Create advanced visualizations for final result
-            stats = plot_temp_func(
-                grid_info=grid_info,
-                temp_data=temp_data,
-                density_data=density_data,
-                output_dir=args.figures_dir,
-                species=args.species_index,  # Use the specified species index
-                multi_species_handling=args.multi_species_handling  # Use the specified handling method
-            )
-            
-            # Also create a dedicated temperature zone map for the final result
-            plot_temp_func(
-                grid_info=grid_info,
-                temp_data=temp_data,
-                density_data=density_data,
-                output_dir=args.figures_dir,
-                species=args.species_index,
-                multi_species_handling=args.multi_species_handling,
-                save_fig=True,
-                show_fig=False,
-                create_zone_map=True  # Create a dedicated temperature zone map
-            )
-            
-            # Print additional temperature statistics
-            print("\n=== Temperature Statistics ===")
-            print(f"Minimum temperature: {stats['min_temperature']:.2f} K")
-            print(f"Maximum temperature: {stats['max_temperature']:.2f} K")
-            print(f"Mean temperature: {stats['mean_temperature']:.2f} K")
-            print(f"Median temperature: {stats['median_temperature']:.2f} K")
-            
-            # Create plots for each iteration if requested
-            if args.save_iter_plots and not args.temp_dependent and 'results' in locals() and 'temp_history' in results and results['temp_history']:
-                print("\n=== Creating temperature plots for each iteration ===")
-                temp_history = results['temp_history']
-                
-                for i, iter_temp in enumerate(temp_history, 1):
-                    # Create temperature plot for this iteration
-                    print(f"Creating plots for iteration {i}...")
-                    
-                    # Create advanced temperature plots for this iteration
-                    iter_stats = plot_temp_func(
-                        grid_info=grid_info,
-                        temp_data=iter_temp,
-                        density_data=density_data,  # Use the same density data for all iterations
-                        output_dir=args.figures_dir,  # Save directly to figures directory
-                        species=args.species_index,
-                        multi_species_handling=args.multi_species_handling,
-                        save_fig=True,
-                        show_fig=False,
-                        iteration=i
-                    )
-                    
-                    # No need to rename the files since they now include species information
-                
-                print(f"Iteration plots saved to {args.figures_dir}")
-                
-        except Exception as e:
-            print(f"Error creating advanced visualizations: {e}")
-            print("Continuing with the rest of the program...")
+                print(f"Error creating advanced visualizations: {e}")
+                print("Continuing with the rest of the program...")
     
     # Compute SED if requested
     if args.compute_sed:
