@@ -790,13 +790,13 @@ def plot_advanced_temperature_density(grid_info=None, temp_data=None, density_da
         # Only plot for the final result (when iteration is None)
         if iteration is None:
             plt.figure(figsize=(10, 8))
-            im = plt.pcolormesh(X/1e15, Y/1e15, 
+            im = plt.pcolormesh(X/au, Y/au, 
                                np.log10(density_slice),
                                shading='auto')
             plt.colorbar(im, label='log₁₀(density) [g/cm³]')
             plt.axis('equal')
-            plt.xlabel('R [1000 AU]')
-            plt.ylabel('z [1000 AU]')
+            plt.xlabel('R [AU]')
+            plt.ylabel('z [AU]')
             
             plt.title(f'Log Dust Density (R-z plane, species {species_label})')
                 
@@ -824,11 +824,11 @@ def plot_advanced_temperature_density(grid_info=None, temp_data=None, density_da
             else:  # 3D case
                 temp_slice_i = temp_data[:, :, slice_phi, i].T
             
-            im = plt.pcolormesh(X/1e15, Y/1e15, temp_slice_i, cmap='inferno', shading='auto')
+            im = plt.pcolormesh(X/au, Y/au, temp_slice_i, cmap='inferno', shading='auto')
             plt.colorbar(im, label='Temperature [K]')
             plt.axis('equal')
-            plt.xlabel('R [1000 AU]')
-            plt.ylabel('z [1000 AU]')
+            plt.xlabel('R [AU]')
+            plt.ylabel('z [AU]')
             plt.title(f'Species {i}')
         
         # Create a tight layout
@@ -863,12 +863,12 @@ def plot_advanced_temperature_density(grid_info=None, temp_data=None, density_da
                 else:  # 3D case
                     density_slice_i = density_data[:, :, slice_phi, i].T
                 
-                im = plt.pcolormesh(X/1e15, Y/1e15, np.log10(density_slice_i), 
+                im = plt.pcolormesh(X/au, Y/au, np.log10(density_slice_i), 
                                    cmap='viridis', shading='auto')
                 plt.colorbar(im, label='log₁₀(density) [g/cm³]')
                 plt.axis('equal')
-                plt.xlabel('R [1000 AU]')
-                plt.ylabel('z [1000 AU]')
+                plt.xlabel('R [AU]')
+                plt.ylabel('z [AU]')
                 plt.title(f'Species {i}')
             
             # Create a tight layout
@@ -896,13 +896,13 @@ def plot_advanced_temperature_density(grid_info=None, temp_data=None, density_da
     # 2. Plot temperature (standard) - skip if 'all' is chosen
     if multi_species_handling != 'all':
         plt.figure(figsize=(10, 8))
-        im = plt.pcolormesh(X/1e15, Y/1e15, 
+        im = plt.pcolormesh(X/au, Y/au, 
                           temp_slice,
                           cmap='inferno', shading='auto')
         plt.colorbar(im, label='Temperature [K]')
         plt.axis('equal')
-        plt.xlabel('R [1000 AU]')
-        plt.ylabel('z [1000 AU]')
+        plt.xlabel('R [AU]')
+        plt.ylabel('z [AU]')
         
         if iteration is not None:
             plt.title(f'Dust Temperature - Iteration {iteration} (R-z plane, species {species_label})')
@@ -932,14 +932,14 @@ def plot_advanced_temperature_density(grid_info=None, temp_data=None, density_da
         norm = BoundaryNorm(bounds, cmap.N)
         
         # Create the main color zone plot
-        im = plt.pcolormesh(X_centers/1e15, Y_centers/1e15, 
+        im = plt.pcolormesh(X_centers/au, Y_centers/au, 
                           temp_slice,
                           cmap=cmap, norm=norm, shading='auto')
         
         # Add contour lines to show temperature boundaries
         try:
             if temp_slice is not None:
-                contours = plt.contour(X_centers/1e15, Y_centers/1e15, temp_slice, 
+                contours = plt.contour(X_centers/au, Y_centers/au, temp_slice, 
                                 levels=[50, 150, 250], colors='white', linewidths=1.5)
                 plt.clabel(contours, inline=True, fontsize=10, fmt='%dK')
         except Exception as e:
@@ -953,8 +953,8 @@ def plot_advanced_temperature_density(grid_info=None, temp_data=None, density_da
         cbar.ax.set_yticklabels(['<50K', '50-150K', '150-250K', '>250K'])
         
         plt.axis('equal')
-        plt.xlabel('R [1000 AU]')
-        plt.ylabel('z [1000 AU]')
+        plt.xlabel('R [AU]')
+        plt.ylabel('z [AU]')
         
         if iteration is not None:
             plt.title(f'Dust Temperature Zones - Iteration {iteration} (R-z plane, species {species_label})')
@@ -1048,13 +1048,13 @@ def plot_advanced_temperature_density(grid_info=None, temp_data=None, density_da
                         temp_slice_i = temp_data[:, :, slice_phi, i].T
                     
                     # Create the temperature zone map for this species
-                    im = plt.pcolormesh(X_centers/1e15, Y_centers/1e15, 
+                    im = plt.pcolormesh(X_centers/au, Y_centers/au, 
                                       temp_slice_i,
                                       cmap=cmap, norm=norm, shading='auto')
                     
                     plt.axis('equal')
-                    plt.xlabel('R [1000 AU]', fontsize=8)
-                    plt.ylabel('z [1000 AU]', fontsize=8)
+                    plt.xlabel('R [AU]', fontsize=8)
+                    plt.ylabel('z [AU]', fontsize=8)
                     plt.title(f'Species {i}', fontsize=10)
                 
                 # Create a tight layout with space for the colorbar
@@ -1104,7 +1104,7 @@ def plot_advanced_temperature_density(grid_info=None, temp_data=None, density_da
             norm = BoundaryNorm(bounds, cmap.N)
             
             # Create the temperature zone map
-            im = plt.pcolormesh(X_centers/1e15, Y_centers/1e15, 
+            im = plt.pcolormesh(X_centers/au, Y_centers/au, 
                               temp_slice,
                               cmap=cmap, norm=norm, shading='auto')
             
@@ -1117,8 +1117,8 @@ def plot_advanced_temperature_density(grid_info=None, temp_data=None, density_da
             cbar.ax.set_yticklabels(['< 50K', '50K - 150K', '150K - 250K', '> 250K'])
             
             plt.axis('equal')
-            plt.xlabel('R [1000 AU]')
-            plt.ylabel('z [1000 AU]')
+            plt.xlabel('R [AU]')
+            plt.ylabel('z [AU]')
             
             title_species = "all species" if multi_species_handling in ['average', 'weighted_avg'] else f"species {species_label}"
             if iteration is not None:
@@ -1599,13 +1599,14 @@ def plot_initial_dust_density(grid_info=None, density_data=None, output_dir='fig
             # Filter out zeros before taking log
             non_zero = density_slice[density_slice > 0]
             if len(non_zero) > 0:
-                vmin = np.log10(np.min(non_zero))
+                # Set minimum density to a physically meaningful value (-24 in log10 scale)
+                vmin = max(np.log10(np.min(non_zero)), -24.0)
                 vmax = np.log10(np.max(non_zero))
             else:
-                # If no non-zero values, use a default range
-                vmin, vmax = -20, -10
+                # If no non-zero values, use physically meaningful defaults
+                vmin, vmax = -24.0, -10.0
         except Exception:
-            vmin, vmax = -20, -10
+            vmin, vmax = -24.0, -10.0
         
         # Create the plot with log scale
         pcm = plt.pcolormesh(X/au, Y/au, np.log10(density_slice),

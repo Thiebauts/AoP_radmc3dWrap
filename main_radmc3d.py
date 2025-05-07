@@ -36,6 +36,7 @@ import shutil
 import argparse
 import subprocess
 import sys
+import json
 from create_input import setup_model, au, Rsun, Msun, verify_dust_temperature_file
 from radmc3d_aux import (run_radmc3d, read_dust_temperature, check_convergence, 
                         plot_convergence_history, 
@@ -285,7 +286,10 @@ def parse_arguments():
     parser.add_argument('--Mdlobe', type=float, default=0.0005, help='Outflow lobe mass in solar masses')
     parser.add_argument('--Rlobe', type=float, default=2500, help='Lobe characteristic radius in AU')
     parser.add_argument('--oangle', type=float, default=18, help='Opening angle in degrees')
+    parser.add_argument('--cone_angle', type=float, default=None, help='Cone cavity opening angle in degrees (default: same as --oangle)')
     parser.add_argument('--width', type=float, default=0.005, help='Lobe width parameter')
+    parser.add_argument('--Rmax_torus', type=float, default=0, help='Maximum radius for the torus in AU (0 = no limit)')
+    parser.add_argument('--Rmax_lobe', type=float, default=0, help='Maximum radius for the outflow lobes in AU (0 = no limit)')
     
     # Physics and Convergence Parameters
     physics = parser.add_argument_group('Physics and Convergence Parameters')
@@ -362,6 +366,64 @@ def parse_arguments():
             print("ERROR: --plot_only and --sed_only cannot be used together")
             sys.exit(1)
     return args
+
+def save_model_params(output_dir, dust_material, dust_size, other_params=None):
+    """
+    Save model parameters to a JSON file for later retrieval in SED-only mode.
+    
+    Parameters:
+    -----------
+    output_dir : str
+        Directory where the model parameters will be saved
+    dust_material : str
+        Dust material composition
+    dust_size : float
+        Dust grain size in microns
+    other_params : dict, optional
+        Additional parameters to save
+    """
+    params = {
+        'dust_material': dust_material,
+        'dust_size': dust_size,
+        # Add other important parameters as needed
+    }
+    if other_params:
+        params.update(other_params)
+    
+    # Ensure the output directory exists
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Save the parameters to a JSON file
+    with open(os.path.join(output_dir, 'model_params.json'), 'w') as f:
+        json.dump(params, f, indent=4)
+    
+    print(f"Saved model parameters to {os.path.join(output_dir, 'model_params.json')}")
+
+def load_model_params(input_dir):
+    """
+    Load model parameters from JSON file if it exists.
+    
+    Parameters:
+    -----------
+    input_dir : str
+        Directory where the model parameters are saved
+    
+    Returns:
+    --------
+    dict or None
+        Dictionary of model parameters if file exists, None otherwise
+    """
+    param_file = os.path.join(input_dir, 'model_params.json')
+    if os.path.exists(param_file):
+        try:
+            with open(param_file, 'r') as f:
+                params = json.load(f)
+            print(f"Loaded model parameters from {param_file}")
+            return params
+        except Exception as e:
+            print(f"Error loading model parameters: {e}")
+    
+    return None
 
 def main():
     """Main function"""
@@ -800,6 +862,18 @@ def main():
             print("Reading data from: {}".format(args.input_dir))
             print("Saving SED to: {}".format(os.path.abspath(output_dir)))
             
+            # Try to load model parameters from input directory
+            input_params = load_model_params(args.input_dir)
+            if input_params:
+                # Only use loaded parameters if not explicitly provided by user
+                if not args.dust_material or args.dust_material == "E40R":  # Default value
+                    args.dust_material = input_params.get('dust_material', args.dust_material)
+                    print(f"Using dust_material from saved parameters: {args.dust_material}")
+                
+                if not args.dust_size or args.dust_size == 0.3:  # Default value
+                    args.dust_size = input_params.get('dust_size', args.dust_size)
+                    print(f"Using dust_size from saved parameters: {args.dust_size}")
+            
             # Change to input directory to read files
             os.chdir(args.input_dir)
             
@@ -820,6 +894,18 @@ def main():
         else:
             # We're already in the output directory (current directory)
             print(f"Computing SED in current directory: {os.path.abspath('.')}")
+            
+            # Try to load model parameters from current directory
+            input_params = load_model_params('.')
+            if input_params:
+                # Only use loaded parameters if not explicitly provided by user
+                if not args.dust_material or args.dust_material == "E40R":  # Default value
+                    args.dust_material = input_params.get('dust_material', args.dust_material)
+                    print(f"Using dust_material from saved parameters: {args.dust_material}")
+                
+                if not args.dust_size or args.dust_size == 0.3:  # Default value
+                    args.dust_size = input_params.get('dust_size', args.dust_size)
+                    print(f"Using dust_size from saved parameters: {args.dust_size}")
             
         print("Observer position: inclination = {}°, phi = {}°".format(args.inclination, args.phi))
         
@@ -1423,6 +1509,15 @@ def main():
         # Convert parameters
         oangle_rad = args.oangle * np.pi / 180  # Convert degrees to radians
         
+        # Convert cone_angle from degrees to radians if specified
+        cone_angle_rad = None
+        if args.cone_angle is not None:
+            cone_angle_rad = args.cone_angle * np.pi / 180
+        
+        # Convert Rmax parameters from AU to cm
+        Rmax_torus_cm = args.Rmax_torus * au if args.Rmax_torus > 0 else 0
+        Rmax_lobe_cm = args.Rmax_lobe * au if args.Rmax_lobe > 0 else 0
+        
         # Set up the water fountain model
         print("\n=== Setting up water fountain model ===")
         grid_info, density = setup_model(
@@ -1444,7 +1539,10 @@ def main():
             F=args.F,
             Rlobe=args.Rlobe * au,
             oangle=oangle_rad,
+            cone_angle=cone_angle_rad,
             width=args.width,
+            Rmax_torus=Rmax_torus_cm,
+            Rmax_lobe=Rmax_lobe_cm,
             scattering_mode_max=args.scattering_mode_max,
             dust_material=args.dust_material,
             dust_size=args.dust_size
@@ -1639,12 +1737,21 @@ def main():
                                     density_slice = density_data
                                     
                                 plt.figure(figsize=(12, 10))
-                                plt.pcolormesh(X/1e15, Y/1e15, np.log10(density_slice),
-                                            cmap='viridis', shading='auto')
+                                
+                                # Calculate vmin with a minimum of -24 for physically meaningful values
+                                non_zero = density_slice[density_slice > 0]
+                                if len(non_zero) > 0:
+                                    vmin = max(np.log10(np.min(non_zero)), -24.0)
+                                    vmax = np.log10(np.max(density_slice))
+                                else:
+                                    vmin, vmax = -24.0, -10.0
+                                
+                                plt.pcolormesh(X/au, Y/au, np.log10(density_slice),
+                                            cmap='viridis', shading='auto', vmin=vmin, vmax=vmax)
                                 plt.colorbar(label='log₁₀(density) [g/cm³]')
                                 plt.axis('equal')
-                                plt.xlabel('R [1000 AU]')
-                                plt.ylabel('z [1000 AU]')
+                                plt.xlabel('R [AU]')
+                                plt.ylabel('z [AU]')
                                 plt.title('Initial Dust Density Structure (Pre-Temperature-Dependent)')
                                 
                                 # Add grid lines for better visibility
@@ -2115,6 +2222,18 @@ def main():
     
     # Compute SED if requested
     if args.compute_sed:
+        # Save the model parameters for future use in SED-only mode
+        save_model_params(
+            output_dir,
+            args.dust_material,
+            args.dust_size,
+            other_params={
+                'scattering_mode_max': args.scattering_mode_max,
+                'temp_dependent': args.temp_dependent,
+                'temp_ranges': args.temp_ranges
+            }
+        )
+        
         # Check that all required files exist for SED computation
         required_files = ['dust_temperature.dat', 'amr_grid.inp', 'wavelength_micron.inp', 
                          'dust_density.inp', 'stars.inp', 'radmc3d.inp']

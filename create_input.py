@@ -141,28 +141,62 @@ def torus_wind(r, theta, params):
     
     Parameters:
     -----------
-    r : ndarray
-        Radius grid
-    theta : ndarray
-        Theta grid (colatitude)
+    r : ndarray or float
+        Radius grid or scalar value
+    theta : ndarray or float
+        Theta grid (colatitude) or scalar value
     params : list
-        [rhomin, Rmin, Rtorus, A, B, C, D, E, F, oangle]
+        [rhomin, Rmin, Rtorus, A, B, C, D, E, F, cone_angle, Rmax_torus]
         
     Returns:
     --------
-    ndarray
+    ndarray or float
         Density distribution
     """
-    rhomin, Rmin, Rtorus, A, B, C, D, E, F, oangle = params
+    rhomin, Rmin, Rtorus, A, B, C, D, E, F, cone_angle, Rmax_torus = params
     
     part1 = (r/Rmin)
     exp1 = -B*(1+C*(np.sin(theta)**F)*(np.exp(-(r/Rtorus)**D))/(np.exp(-(Rmin/Rtorus)**D)))
     part2 = (1+A*((1-np.cos(theta))**F)*(np.exp(-(r/Rtorus)**E))/(np.exp(-(Rmin/Rtorus)**E)))
     torusdens = (rhomin*(part1**exp1) * part2)
-    torusdens = np.where(r<Rmin, 0., torusdens)
-    torusdens = np.where(np.abs(theta)<oangle, 0.001*torusdens, torusdens)
     
-    return torusdens
+    # Check if we're dealing with scalar or array inputs
+    if np.isscalar(r) and np.isscalar(theta):
+        # Scalar case - use conditional logic
+        if r < Rmin or abs(theta) < cone_angle or (Rmax_torus > 0 and r > Rmax_torus):
+            # Find minimum non-zero density to use a fraction of it
+            # Since we're dealing with a scalar, we can't compute a minimum
+            # Use a very small default value instead
+            min_replace = 1e-40
+            return min_replace
+        else:
+            return torusdens
+    else:
+        # Array case - use numpy masking operations
+        masked_torusdens = torusdens.copy()
+        inside_mask = r < Rmin
+        cone_mask = np.abs(theta) < cone_angle
+        masked_torusdens[inside_mask] = 0.
+        masked_torusdens[cone_mask] = 0.
+        
+        if Rmax_torus > 0:
+            outer_mask = r > Rmax_torus
+            masked_torusdens[outer_mask] = 0.
+        
+        # Find minimum non-zero density value
+        non_zero = masked_torusdens[masked_torusdens > 0]
+        if len(non_zero) > 0:
+            min_density = np.min(non_zero)
+            # Use a very small fraction of the minimum value (1e-10)
+            min_replace = min_density * 1e-10
+        else:
+            # If all values are zero, use a very small absolute value
+            min_replace = 1e-40
+        
+        # Replace zeros with small values
+        final_torusdens = np.where(masked_torusdens > 0, masked_torusdens, min_replace)
+        
+        return final_torusdens
 
 def outflow_lobe(r, theta, params):
     """
@@ -170,24 +204,55 @@ def outflow_lobe(r, theta, params):
     
     Parameters:
     -----------
-    r : ndarray
-        Radius grid
-    theta : ndarray
-        Theta grid (colatitude)
+    r : ndarray or float
+        Radius grid or scalar value
+    theta : ndarray or float
+        Theta grid (colatitude) or scalar value
     params : list
-        [lobe_dens, Rlobe, lobe_angle, width]
+        [lobe_dens, Rlobe, lobe_angle, width, Rmax_lobe]
         
     Returns:
     --------
-    ndarray
+    ndarray or float
         Density distribution
     """
-    lobe_dens, Rlobe, lobe_angle, width = params
+    lobe_dens, Rlobe, lobe_angle, width, Rmax_lobe = params
     
     scale = (r/Rlobe)**2 + (theta/lobe_angle)**2
     lobedens = lobe_dens * np.exp(-(1-scale)**2/(2*width))
     
-    return lobedens
+    # Check if we're dealing with scalar or array inputs
+    if np.isscalar(r) and np.isscalar(theta):
+        # Scalar case - use conditional logic
+        if Rmax_lobe > 0 and r > Rmax_lobe:
+            # Use a very small default value for scalar case
+            min_replace = 1e-40
+            return min_replace
+        else:
+            return lobedens
+    else:
+        # Array case - use numpy masking operations
+        masked_lobedens = lobedens.copy()
+        
+        # Apply radial cutoff for the lobe if specified
+        if Rmax_lobe > 0:
+            outer_mask = r > Rmax_lobe
+            masked_lobedens[outer_mask] = 0.
+        
+        # Find minimum non-zero density value
+        non_zero = masked_lobedens[masked_lobedens > 0]
+        if len(non_zero) > 0:
+            min_density = np.min(non_zero)
+            # Use a very small fraction of the minimum value (1e-10)
+            min_replace = min_density * 1e-10
+        else:
+            # If all values are zero, use a very small absolute value
+            min_replace = 1e-40
+        
+        # Replace zeros with small values
+        final_lobedens = np.where(masked_lobedens > 0, masked_lobedens, min_replace)
+        
+        return final_lobedens
 
 def intmass(r, theta, func, params):
     """
@@ -302,7 +367,7 @@ def create_water_fountain_density(grid_info, torus_params, lobe_params):
     grid_info : dict
         Grid information from create_water_fountain_grid
     torus_params : list
-        Parameters for the torus: [rhomin, Rmin, Rtorus, A, B, C, D, E, F, oangle]
+        Parameters for the torus: [rhomin, Rmin, Rtorus, A, B, C, D, E, F, cone_angle]
     lobe_params : list
         Parameters for the outflow lobes: [lobe_dens, Rlobe, lobe_angle, width]
         
@@ -587,7 +652,8 @@ def setup_water_fountain_model(rin=100*au, rout=5000*au, nr=1000, ntheta=150,
                              stellar_radius=288*Rsun, stellar_mass=1*Msun, stellar_temp=3000,
                              Mdtorus=1.0/200, Mdlobe=0.1/200, 
                              Rtorus=1000*au, A=1, B=3, C=0, D=10, E=3, F=2,
-                             Rlobe=2500*au, oangle=np.pi/10, width=0.005,
+                             Rlobe=2500*au, oangle=np.pi/10, cone_angle=None, width=0.005,
+                             Rmax_torus=0, Rmax_lobe=0,
                              scattering_mode_max=1, dust_material='E40R', dust_size=0.3):
     """
     Set up a complete water fountain model with torus and outflow lobes.
@@ -619,9 +685,16 @@ def setup_water_fountain_model(rin=100*au, rout=5000*au, nr=1000, ntheta=150,
     Rlobe : float
         Characteristic radius of the lobes in cm
     oangle : float
-        Opening angle of the outflow cavity in radians
+        Opening angle of the outflow lobe in radians
+    cone_angle : float or None
+        Opening angle of the cone cavity in radians.
+        If None, uses the same value as oangle.
     width : float
         Width parameter for the outflow lobes
+    Rmax_torus : float
+        Maximum radius for the torus in cm (0 = no limit)
+    Rmax_lobe : float
+        Maximum radius for the outflow lobes in cm (0 = no limit)
     scattering_mode_max : int
         Maximum scattering mode (0=no scattering, 1=isotropic, 2=anisotropic)
     dust_material : str
@@ -634,9 +707,13 @@ def setup_water_fountain_model(rin=100*au, rout=5000*au, nr=1000, ntheta=150,
     tuple
         (grid_info, density_array)
     """
+    # If cone_angle is not specified, use the same value as oangle
+    if cone_angle is None:
+        cone_angle = oangle
+    
     # Create initial parameter arrays
-    torus_params = [1.0, rin, Rtorus, A, B, C, D, E, F, oangle]
-    lobe_params = [1.0, Rlobe, oangle, width]
+    torus_params = [1.0, rin, Rtorus, A, B, C, D, E, F, cone_angle, Rmax_torus]
+    lobe_params = [1.0, Rlobe, oangle, width, Rmax_lobe]
     
     # Create grid for mass calculations
     R_calc = np.linspace(rin, rout, 2000, endpoint=True)
@@ -654,6 +731,14 @@ def setup_water_fountain_model(rin=100*au, rout=5000*au, nr=1000, ntheta=150,
     # Print the actual masses after scaling
     print(f'Mass torus: {intmass(xx, yy, torus_wind, torus_params):.6f} Msun')
     print(f'Mass lobe: {intmass(xx, yy, outflow_lobe, lobe_params):.6f} Msun')
+    print(f'Lobe opening angle: {oangle*180/np.pi:.2f} degrees')
+    print(f'Cone cavity opening angle: {cone_angle*180/np.pi:.2f} degrees')
+    
+    # Print the maximum radii if specified
+    if Rmax_torus > 0:
+        print(f'Maximum torus radius: {Rmax_torus/au:.1f} AU')
+    if Rmax_lobe > 0:
+        print(f'Maximum lobe radius: {Rmax_lobe/au:.1f} AU')
     
     # Create the wavelength grid
     create_wavelength_grid(water_fountain=True)
@@ -921,7 +1006,12 @@ def setup_model(grid_type='cartesian', model_type='water_fountain', **kwargs):
         
         Rlobe = kwargs.get('Rlobe', 2500*au)
         oangle = kwargs.get('oangle', np.pi/10)
+        cone_angle = kwargs.get('cone_angle', None)
         width = kwargs.get('width', 0.005)
+        
+        # Get the maximum radii parameters with default of 0 (no limit)
+        Rmax_torus = kwargs.get('Rmax_torus', 0)
+        Rmax_lobe = kwargs.get('Rmax_lobe', 0)
         
         # Get scattering_mode_max with default value 1
         scattering_mode_max = kwargs.get('scattering_mode_max', 1)
@@ -935,7 +1025,8 @@ def setup_model(grid_type='cartesian', model_type='water_fountain', **kwargs):
             stellar_radius=stellar_radius, stellar_mass=stellar_mass, stellar_temp=stellar_temp,
             Mdtorus=Mdtorus, Mdlobe=Mdlobe,
             Rtorus=Rtorus, A=A, B=B, C=C, D=D, E=E, F=F,
-            Rlobe=Rlobe, oangle=oangle, width=width,
+            Rlobe=Rlobe, oangle=oangle, cone_angle=cone_angle, width=width,
+            Rmax_torus=Rmax_torus, Rmax_lobe=Rmax_lobe,
             scattering_mode_max=scattering_mode_max,
             dust_material=dust_material, dust_size=dust_size
         )
