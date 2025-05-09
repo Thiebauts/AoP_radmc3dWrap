@@ -17,6 +17,7 @@ import shutil
 import argparse
 import sys
 from pathlib import Path
+import re
 
 # Dictionary of densities (g/cm³) for each composition
 DENSITIES = {
@@ -60,14 +61,16 @@ def check_optool_installed():
     except FileNotFoundError:
         return False
 
-def find_nk_file(material, nk_dir="nk_optool"):
+def find_nk_file(material, temp=None, nk_dir="nk_optool"):
     """
-    Find the .lnk file for the specified material in the nk_dir.
+    Find the .lnk file for the specified material and temperature in the nk_dir.
     
     Parameters:
     -----------
     material : str
         Material identifier (e.g., 'E40R')
+    temp : int, optional
+        Temperature in K to look for specific temperature file
     nk_dir : str
         Directory containing the .lnk files
     
@@ -80,7 +83,14 @@ def find_nk_file(material, nk_dir="nk_optool"):
         print(f"Error: nk directory {nk_dir} not found.")
         return None
     
-    # First, try exact match
+    if temp is not None:
+        # Try exact match with temperature
+        temp_match = os.path.join(nk_dir, f"{material}_{temp}K.lnk")
+        if os.path.exists(temp_match):
+            print(f"Found temperature-specific file: {temp_match}")
+            return temp_match
+    
+    # Try exact match without temperature
     exact_match = os.path.join(nk_dir, f"{material}.lnk")
     if os.path.exists(exact_match):
         return exact_match
@@ -88,6 +98,7 @@ def find_nk_file(material, nk_dir="nk_optool"):
     # If not found, search through all files
     for filename in os.listdir(nk_dir):
         if filename.lower().endswith('.lnk') and material.lower() in filename.lower():
+            print(f"Warning: Using {filename} which may not match the requested temperature ({temp}K).")
             return os.path.join(nk_dir, filename)
     
     return None
@@ -103,7 +114,7 @@ def run_optool(material, grain_size, temp=None, nk_dir="nk_optool", output_dir="
     grain_size : float
         Grain size in microns
     temp : int, optional
-        Temperature in K (for file naming only, not used in Optool calculation)
+        Temperature in K (for file naming and .lnk file selection)
     nk_dir : str
         Directory containing the .lnk files
     output_dir : str
@@ -117,24 +128,25 @@ def run_optool(material, grain_size, temp=None, nk_dir="nk_optool", output_dir="
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
-    # Find the appropriate .lnk file
-    nk_file = find_nk_file(material, nk_dir)
+    # Find the appropriate .lnk file with temperature consideration
+    nk_file = find_nk_file(material, temp, nk_dir)
     if not nk_file:
-        print(f"Error: No .lnk file found for material {material} in {nk_dir}")
+        print(f"Error: No .lnk file found for material {material} with temperature {temp}K in {nk_dir}")
         return None
     
+    # Extract the base material name without any temperature indicators
+    # This prevents duplicate temperature indicators in output directory names
+    # Strip any existing temperature indicators (like _10K, _100K, etc.)
+    base_material = re.sub(r'_\d+K$', '', material)
+    
     # Prepare filename components
-    base_name = os.path.splitext(os.path.basename(nk_file))[0]
     size_str = f"a{grain_size}"
     temp_str = f"{temp}K" if temp else ""
     
-    # Create a unique output filename
-    if temp:
-        output_file = f"{base_name}_{temp_str}_{size_str}.dat"
-    else:
-        output_file = f"{base_name}_{size_str}.dat"
+    # Create a unique output directory name (without .dat extension)
+    output_dir_name = f"{base_material}_{temp_str}_{size_str}"
     
-    output_path = os.path.join(output_dir, output_file)
+    output_path = os.path.join(output_dir, output_dir_name)
     
     # Construct Optool command - do not include -T parameter as it's not supported
     cmd = [
@@ -148,7 +160,8 @@ def run_optool(material, grain_size, temp=None, nk_dir="nk_optool", output_dir="
     
     try:
         print(f"Running Optool for {material} with grain size {grain_size}μm" + 
-              (f" (using filename label {temp}K)" if temp else "") + "...")
+              (f" (using {os.path.basename(nk_file)} for {temp}K)" if temp else "") + "...")
+        print(f"Output will be in directory: {output_path}")
         
         # Run Optool
         result = subprocess.run(cmd, 
@@ -158,7 +171,7 @@ def run_optool(material, grain_size, temp=None, nk_dir="nk_optool", output_dir="
                                check=True)
         
         # Check if output directory was created
-        output_dir_path = os.path.join(output_dir, output_file)
+        output_dir_path = output_path  # No longer need to add file extension
         if not os.path.exists(output_dir_path):
             print(f"Warning: Expected output directory {output_dir_path} not found.")
             print(f"Optool output: {result.stdout}")
@@ -171,9 +184,9 @@ def run_optool(material, grain_size, temp=None, nk_dir="nk_optool", output_dir="
         if os.path.exists(source_file):
             # Create new filename based on the model parameters
             if temp:
-                new_filename = f"dustkapscatmat_{material}_{temp}K_{size_str}.inp"
+                new_filename = f"dustkapscatmat_{base_material}_{temp}K_{size_str}.inp"
             else:
-                new_filename = f"dustkapscatmat_{material}_{size_str}.inp"
+                new_filename = f"dustkapscatmat_{base_material}_{size_str}.inp"
             
             # Copy to output_dir
             destination_file = os.path.join(output_dir, new_filename)

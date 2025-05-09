@@ -440,3 +440,12 @@ The code provides several visualization options for multi-species models:
 - When running temperature calculations, dust parameters (material, size) are saved to `model_params.json`
 - In SED-only mode, these parameters are automatically loaded if not explicitly specified, this eliminates the need to re-specify `--dust_size` and `--dust_material` when generating SEDs from existing temperature files
 - Modified the density model to replace zero density values with very small non-zero values (Instead of setting density to exactly zero in regions like the cone cavity or beyond maximum radius, now using a very small fraction (1e-10) of the minimum non-zero density)
+
+### v2.2.0
+- Fixed critical bug in dust opacity file selection (thank you Theo!)
+  - Previously, when running Optool with a specific temperature (e.g., 300K), the code would use the first .lnk file it found for the material regardless of temperature
+  - Now properly searches for and uses temperature-specific .lnk files (e.g., E40R_300K.lnk)
+  - Added warning when falling back to a .lnk file that doesn't match the requested temperature
+- Fixed duplicate temperature indicators in output filenames (e.g., "E40R_10K_10K_a0.3.dat" → "E40R_10K_a0.3.dat")
+- Improved logging to show which .lnk file is actually being used for calculations
+- Removed confusing .dat extension from Optool output paths, making directory names cleaner (e.g., "E40R_10K_a0.3.dat" → "E40R_10K_a0.3")
