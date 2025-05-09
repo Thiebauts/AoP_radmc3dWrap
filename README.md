@@ -17,6 +17,7 @@ This project provides a Python framework for running RADMC-3D dust temperature c
   - [Physics Parameters](#physics-parameters)
   - [Calculation Control](#calculation-control)
   - [Output & Visualization](#output--visualization)
+  - [Parameter Grid Exploration](#parameter-grid-exploration)
 - [Convergence Analysis](#convergence-analysis)
 - [Outputs](#outputs)
 - [References](#references)
@@ -359,6 +360,149 @@ The `--multi_species_handling` option controls how multiple dust species are dis
 - `weighted_avg`: Weight temperatures by dust density
 - `all`: Create a panel showing all species
 
+## Parameter Grid Exploration
+
+This project includes a parameter grid exploration tool that allows systematic exploration of the parameter space by running `main_radmc3d.py` with different parameter combinations.
+
+### Features
+
+- Explore multiple parameters simultaneously using ranges (linear or logarithmic)
+- Keep other parameters fixed with single values
+- Run calculations in parallel to utilize multi-core systems
+- Automatically organize results in a structured directory hierarchy
+- Capture terminal output in log files for each parameter combination
+- Track execution status and statistics for all runs
+
+### Usage
+
+To use the parameter grid explorer, create a JSON configuration file defining the parameters to explore:
+
+```json
+{
+  "ranges": {
+    "Mdtorus": {
+      "min": 0.001,
+      "max": 0.01,
+      "points": 5,
+      "scale": "log"
+    },
+    "Rtorus": {
+      "min": 800,
+      "max": 1500,
+      "points": 4,
+      "scale": "linear"
+    }
+  },
+  "single_values": {
+    "oangle": 15,
+    "nphotons_max": 1e7,
+    "iterations": 6
+  }
+}
+```
+
+Then run the grid exploration:
+
+```bash
+python parameter_grid_explorer.py config.json --output_dir=grid_results
+```
+
+### Command Line Options
+
+- `config_file`: JSON configuration file (required)
+- `--output_dir`: Base output directory (default: "parameter_grid_results")
+- `--base_name`: Custom name for results folder (default: timestamp-based folder in output_dir)
+- `--start_index`: Start index for runs to resume from a specific point (default: 0)
+- `--dry_run`: Only print commands without running them (useful for testing)
+- `--max_processes`: Maximum number of parallel processes (default: number of CPU cores)
+- `--independent`: Explore parameters independently (one at a time) rather than as a full grid
+
+### Exploration Modes
+
+The grid explorer supports two modes of parameter exploration:
+
+1. **Full Grid Mode (default)**: Creates all possible combinations of parameter values, resulting in a comprehensive but potentially large parameter space.
+
+2. **Independent Mode**: Varies one parameter at a time from a reference configuration, useful for exploring the effect of individual parameters while keeping others constant.
+
+Example of the difference with two parameters (A and B) each having 4 values:
+- Full grid mode: Generates 16 combinations (all A×B pairs)
+- Independent mode: Generates 7 configurations (1 reference + 3 A variations + 3 B variations)
+
+Independent mode is particularly useful when you want to:
+- Understand the sensitivity of your model to each parameter individually
+- Reduce the computational load when exploring many parameters
+- Perform an initial parameter sensitivity analysis before a more comprehensive exploration
+
+To enable independent mode:
+```bash
+python parameter_grid_explorer.py my_config.json --independent
+```
+
+### Output Structure
+
+The grid exploration creates a directory structure:
+
+```
+parameter_grid_results/
+├── 20240305_123456/           # Timestamp-based folder or custom name
+│   ├── grid_config.json       # Copy of the original configuration
+│   ├── all_combinations.json  # Details of all parameter combinations and results
+│   ├── summary.txt            # Brief summary of the exploration run
+│   ├── node_0_0/              # Results for first parameter combination
+│   │   ├── params.json        # Parameter values used for this run
+│   │   ├── stdout.log         # Terminal output from main_radmc3d.py
+│   │   ├── stderr.log         # Error output if any
+│   │   └── ...                # Other RADMC-3D output files
+│   ├── node_0_1/              # Results for next parameter combination
+│   └── ...                    # Additional nodes
+```
+
+In independent mode, the same directory structure and naming convention is used, but with fewer node directories since only one parameter varies at a time:
+
+```
+parameter_grid_results/
+├── 20240305_123456/
+│   ├── grid_config.json
+│   ├── all_combinations.json
+│   ├── summary.txt
+│   ├── node_0_0/              # Base configuration (all parameters at their first values)
+│   ├── node_1_0/              # Parameter 0 at its second value, others at first values
+│   ├── node_2_0/              # Parameter 0 at its third value, others at first values
+│   ├── node_0_1/              # Parameter 1 at its second value, others at first values
+│   └── ...
+```
+
+The node directory naming follows the pattern `node_i_j_k...` where each position corresponds to the index of the value being used for each parameter. For example, with two parameters A and B:
+- `node_0_0`: A=A₀, B=B₀ (base configuration in independent mode)
+- `node_1_0`: A=A₁, B=B₀ (only parameter A varies)
+- `node_2_0`: A=A₂, B=B₀ (only parameter A varies)
+- `node_0_1`: A=A₀, B=B₁ (only parameter B varies)
+
+Each node directory contains the standard RADMC-3D output files along with logs of the terminal output from each run.
+
+### Example Commands
+
+Run a parameter grid with default settings:
+```bash
+python parameter_grid_explorer.py my_config.json
+```
+
+Run with custom output directory and limited parallel processes:
+```bash
+python parameter_grid_explorer.py my_config.json --output_dir=custom_results --max_processes=4
+```
+
+Test configuration without running calculations:
+```bash
+python parameter_grid_explorer.py my_config.json --dry_run
+```
+
+Resume from a specific run (e.g., after a previous run was interrupted):
+```bash
+python parameter_grid_explorer.py my_config.json --start_index=10
+```
+
 ## Convergence Analysis
 
 The code checks for convergence between iterations by comparing the dust temperature solutions and calculating:
@@ -449,3 +593,16 @@ The code provides several visualization options for multi-species models:
 - Fixed duplicate temperature indicators in output filenames (e.g., "E40R_10K_10K_a0.3.dat" → "E40R_10K_a0.3.dat")
 - Improved logging to show which .lnk file is actually being used for calculations
 - Removed confusing .dat extension from Optool output paths, making directory names cleaner (e.g., "E40R_10K_a0.3.dat" → "E40R_10K_a0.3")
+
+### v3.0.0
+- Added parameter grid exploration tool (`parameter_grid_explorer.py`) for systematic exploration of parameter space
+- Supports two exploration modes:
+  - Full grid mode: Generates all possible combinations of parameter values
+  - Independent mode: Varies one parameter at a time from a reference configuration (`--independent` option)
+- Features parallel execution for efficient parameter space exploration
+- Automatically organizes results in a structured directory hierarchy with consistent naming
+- Captures terminal output for each parameter set in log files
+- Provides detailed metadata and execution statistics for all parameter combinations
+- Supports resuming interrupted explorations with `--start_index` option
+- Offers a dry run mode for testing configurations without actual execution
+- Configurable parallelism with `--max_processes` option

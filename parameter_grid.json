@@ -1,0 +1,35 @@
+{
+  "ranges": {
+    "A": {
+      "min": 1,
+      "max": 1000,
+      "points": 4,
+      "scale": "log"
+    }, 
+    "rin": {
+      "min": 50,
+      "max": 250,
+      "points": 4,
+      "scale": "linear"
+    }, 
+    "B": {
+      "min": 0,
+      "max": 5,
+      "points": 4,
+      "scale": "linear"
+    }, 
+    "Rtorus": {
+      "min": 200,
+      "max": 1000,
+      "points": 4,
+      "scale": "linear"
+    }   
+  },
+  "single_values": {
+    "no_plots": true,
+    "no_compute_sed": true,
+    "sed_only": false,
+    "nphotons_start": 1e2, 
+    "iterations": 1
+  }
+} 
